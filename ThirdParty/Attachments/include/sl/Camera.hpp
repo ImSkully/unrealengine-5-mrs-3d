@@ -5290,42 +5290,6 @@ namespace sl {
         bool enable_pose_smoothing;
 
         /**
-        This mode initializes the tracking to be aligned with the floor plane to better position the camera in space.
-        \n default: false
-        \note: This launches floor plane detection in the background until a suitable floor plane is found.
-        The tracking is in POSITIONAL_TRACKING_STATE::SEARCHING state.
-
-        \warning: This features work best with the ZED-M since it needs an IMU to classify the floor.
-         * The ZED needs to look at the floor during initialization for optimum results.
-         */
-        bool set_floor_as_origin;
-
-        /**
-        Area localization file that describes the surroundings, saved from a previous tracking session.
-        \n default: (empty)
-
-        \note Loading an area file will start a search phase, during which the camera will try to position itself in the previously learned area.
-
-        \warning: The area file describes a specific location. If you are using an area file describing a different location, the tracking function will continuously search for a position and may not find a correct one.
-        \warning The '.area' file can only be used with the same depth mode (\ref MODE) as the one used during area recording.
-         */
-        String area_file_path;
-
-        /**
-        This setting allows you to enable or disable IMU fusion. When set to false, only the optical odometry will be used.
-        \n default: true
-        \note This setting has no impact on the tracking of a ZED camera; only the ZED Mini uses a built-in IMU.
-         */
-        bool enable_imu_fusion;
-
-        /**
-        This setting allows you define the camera as static. If true, it will not move in the environment. This allows you to set its position using initial_world_transform.
-        \n All SDK functionalities requiring positional tracking will be enabled.
-        \n Camera::getPosition() will return the value set as initial_world_transform for the PATH, and identity as the POSE.
-         */
-        bool set_as_static;
-
-        /**
         \brief  Default constructor. Sets all parameters to their default and optimized values.
          */
         PositionalTrackingParameters(Transform init_pos = Transform(), bool _enable_memory = true, bool _enable_pose_smoothing = false, String _area_path = String(),
@@ -6907,12 +6871,6 @@ namespace sl {
         \return \ref StreamingParameters containing the parameters used for streaming initialization.
          */
         StreamingParameters getStreamingParameters();
-
-        ///@}
-
-
-
-
 
         ///@{
         /// @name Object Detection
