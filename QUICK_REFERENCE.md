@@ -202,8 +202,10 @@ void MRS3D_Clear()
 UFUNCTION(Exec)
 void MRS3D_Test(int32 Num)
 {
-    FindActorOfClass<AMRS3DGameplayActor>()
-        ->SimulateARInput(Num, 500.0f);
+    if (AMRS3DGameplayActor* Actor = FindActorOfClass<AMRS3DGameplayActor>())
+    {
+        Actor->SimulateARInput(Num, 500.0f);
+    }
 }
 ```
 
@@ -225,12 +227,12 @@ if (Points.Num() > 10000)
 ```cpp
 // Good
 Mapper->SetRealTimeUpdates(false);
-for (batch : batches)
+for (const auto& batch : batches)
     Mapper->AddBitmapPoints(batch);
 Mapper->SetRealTimeUpdates(true);
 
 // Bad
-for (point : points)
+for (const auto& point : points)
     Mapper->AddBitmapPoint(point); // Broadcasts each time!
 ```
 
