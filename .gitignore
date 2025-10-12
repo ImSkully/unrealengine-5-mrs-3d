@@ -39,3 +39,21 @@
 
 # debug information files
 *.dwo
+
+# Unreal Engine specific
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+.vs/
+.vscode/
+
+# Plugin specific
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+Plugins/*/Build/

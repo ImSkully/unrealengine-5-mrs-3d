@@ -1,0 +1,30 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "MRS3D Plugin",
+	"Description": "Mixed Reality Spatial 3D Procedural Generation Plugin with AR/MR Bitmap Mapping",
+	"Category": "Procedural",
+	"CreatedBy": "Skully",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "MRS3DPlugin",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Android",
+				"IOS",
+				"HoloLens"
+			]
+		}
+	]
+}
