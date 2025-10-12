@@ -8,7 +8,7 @@ This repository now contains a complete Unreal Engine 5 procedural generation sy
 ### 1. Project Structure
 - **MRS3D.uproject**: Main Unreal Engine 5 project file configured for MR/AR platforms
 - **Build Configuration**: Complete C# build targets for game and editor
-- **Platform Support**: Configured for Windows, Android, iOS, and HoloLens
+- **Platform Support**: Configured for Windows, Android, iOS, and HoloLens (Note: Update to HoloLens2 for current hardware)
 
 ### 2. Core Module (Source/MRS3D)
 The main game module that bootstraps the project:
@@ -199,11 +199,11 @@ unrealengine-5-mrs-3d/
 
 ## Code Quality
 
-- **Total C++ Files**: 11 (.h and .cpp)
+- **Total C++ Files**: 11 (.h and .cpp across main module and plugin)
 - **Build Files**: 4 (.cs files)
 - **Configuration**: 4 (.ini files)
 - **Documentation**: 3 (README + 2 guides)
-- **Lines of Code**: ~2000+ lines of production code
+- **Lines of Code**: ~880 lines (including build configurations)
 - **Platform Coverage**: 4 platforms (Windows, Android, iOS, HoloLens)
 
 ## Integration Points

@@ -181,6 +181,7 @@ Edit `Plugins/MRS3DPlugin/Config/DefaultMRS3DPlugin.ini` to configure default se
 - Windows Mixed Reality plugin required
 - Spatial mapping data can be fed directly to the system
 - Configure hand tracking for interactive placement
+- **Note**: For HoloLens 2 devices, update platform target to "HoloLens2" in .uproject and .uplugin files
 
 ## License
 MIT License - See LICENSE file for details
