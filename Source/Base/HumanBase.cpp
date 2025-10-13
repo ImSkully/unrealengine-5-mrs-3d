@@ -42,7 +42,7 @@ void AHumanBase::Rotate(float DeltaTime)
 	FRotator CurrentRotation = GetActorRotation();
 	if (CurrentRotation != DesiredRotation)
 	{
-		SetActorRotation(FMath::RInterpConstantTo(CurrentRotation, DesiredRotation, DeltaTime, RotationSpeed));
+		SetActorRotation(FMath::RInterpConstantTo(CurrentRotation, DesiredRotation, DeltaTime, RotationVelocity));
 	}
 }
 
