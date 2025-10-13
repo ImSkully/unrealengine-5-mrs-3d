@@ -7,22 +7,26 @@
 #include "MotionControllerComponentCustom.generated.h"
 
 /**
- * 
+ * Custom Motion Controller Component with enhanced late update support
  */
-UCLASS()
+UCLASS(ClassGroup = (MotionController), meta = (BlueprintSpawnableComponent))
 class MYPROJECT_API UMotionControllerComponentCustom : public UMotionControllerComponent
 {
 	GENERATED_BODY()
 
-	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-	
+public:
+	UMotionControllerComponentCustom(const FObjectInitializer& ObjectInitializer);
+
+protected:
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
 private:
-	/** View extension object that can persist on the render thread without the motion controller component */
+	/** View extension object that persists on the render thread for late updates */
 	class FViewExtension : public FSceneViewExtensionBase
 	{
 	public:
-		FViewExtension(const FAutoRegister& AutoRegister, UMotionControllerComponentCustom* InMotionControllerComponent);
-		virtual ~FViewExtension() {}
+		explicit FViewExtension(const FAutoRegister& AutoRegister, UMotionControllerComponentCustom* InMotionControllerComponent);
+		virtual ~FViewExtension() override = default;
 
 		/** ISceneViewExtension interface */
 		virtual void SetupViewFamily(FSceneViewFamily& InViewFamily) override {}
@@ -32,17 +36,27 @@ private:
 		virtual void PreRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& InViewFamily) override;
 		virtual void PostRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& InViewFamily) override;
 		virtual int32 GetPriority() const override { return -10; }
-		virtual bool IsActiveThisFrame(class FViewport* InViewport) const;
+		virtual bool IsActiveThisFrame(const FViewport* InViewport) const override;
 
 	private:
 		friend class UMotionControllerComponentCustom;
 
 		/** Motion controller component associated with this view extension */
-		UMotionControllerComponentCustom* MotionControllerComponent;
+		TWeakObjectPtr<UMotionControllerComponentCustom> MotionControllerComponent;
+		
+		/** Manager for handling late frame updates */
 		FLateUpdateManager LateUpdate;
 	};
-	TSharedPtr< FViewExtension, ESPMode::ThreadSafe > ViewExtension;
 
-	/** If true, the Position and Orientation args will contain the most recent controller state */
+	/** Thread-safe shared pointer to view extension */
+	TSharedPtr<FViewExtension, ESPMode::ThreadSafe> ViewExtension;
+
+	/** 
+	 * Polls the current state of the motion controller
+	 * @param Position Output parameter for controller position
+	 * @param Orientation Output parameter for controller rotation
+	 * @param WorldToMetersScale Scale factor for converting to world units
+	 * @return true if controller state was successfully retrieved
+	 */
 	bool PollControllerState(FVector& Position, FRotator& Orientation, float WorldToMetersScale);
 };
