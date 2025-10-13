@@ -6,13 +6,12 @@
 // Sets default values
 AFirstPersonBase::AFirstPersonBase()
 {
- 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
-	DefaultSceneRoot = CreateDefaultSubobject<USceneComponent>("Default Scene Root");
-	Camera = CreateDefaultSubobject<UCameraComponent>("Camera");
+	DefaultSceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("Default Scene Root"));
+	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->bLockToHmd = true;
-
 	Camera->AttachToComponent(DefaultSceneRoot, FAttachmentTransformRules::KeepRelativeTransform);
 	Camera->SetRelativeLocation(FVector(0, 0, 170));
 }
@@ -21,14 +20,13 @@ AFirstPersonBase::AFirstPersonBase()
 void AFirstPersonBase::BeginPlay()
 {
 	Super::BeginPlay();
-	
+	InitLocation = Camera->GetComponentLocation();
 }
 
 // Called every frame
 void AFirstPersonBase::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	static auto InitLocation = Camera->GetComponentLocation();
 
 	FScopeLock Lock(&TransformCrit);
 	Camera->SetWorldRotation(InternalTransform.Rotator());
@@ -39,23 +37,20 @@ void AFirstPersonBase::Tick(float DeltaTime)
 void AFirstPersonBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
-
 }
 
 void AFirstPersonBase::TrackBodyIK(sl::Pose& zed_pose, UMyGameInstanceCode* GameInstance)
 {
-	auto PlayerCharacter = this;
-	//COORDS CHANGE
 	FTransform Transform = sl::unreal::ToUnrealType(sl::Transform(zed_pose.getRotation(), zed_pose.getTranslation()));
 
-	if (IsValid(PlayerCharacter))
+	if (IsValid(this))
 	{
-		FScopeLock Lock(&PlayerCharacter->TransformCrit);
-		PlayerCharacter->InternalTransform = Transform;
+		FScopeLock Lock(&TransformCrit);
+		InternalTransform = Transform;
 	}
 	else
 	{
-		FScopeLock(&GameInstance->InitTransformCrit);
+		FScopeLock Lock(&GameInstance->InitTransformCrit);
 		GameInstance->InitTransform = Transform;
 	}
 }
@@ -63,6 +58,5 @@ void AFirstPersonBase::TrackBodyIK(sl::Pose& zed_pose, UMyGameInstanceCode* Game
 void AFirstPersonBase::BeginDestroy()
 {
 	Super::BeginDestroy();
-	std::unique_lock<std::shared_mutex> Lock(ReleaseMemoryLock);//Hold until all background threads referencing "this" are done
+	std::unique_lock<std::shared_mutex> Lock(ReleaseMemoryLock);
 }
-
