@@ -100,51 +100,55 @@ void UMotionControllerComponentCustom::TickComponent(float DeltaTime, ELevelTick
 
 bool UMotionControllerComponentCustom::PollControllerState(FVector& Position, FRotator& Orientation, float WorldToMetersScale)
 {
+	// Update authority cache on game thread
 	if (IsInGameThread())
 	{
-		// Cache state from the game thread for use on the render thread
 		const AActor* MyOwner = GetOwner();
 		const APawn* MyPawn = Cast<APawn>(MyOwner);
-		bHasAuthority = MyPawn ? MyPawn->IsLocallyControlled() : (MyOwner->Role == ENetRole::ROLE_Authority);
+		bHasAuthority = MyPawn ? MyPawn->IsLocallyControlled() : (MyOwner && MyOwner->GetLocalRole() == ENetRole::ROLE_Authority);
 	}
 
-	if (bHasAuthority)
+	if (!bHasAuthority)
 	{
-		TArray<IMotionController*> MotionControllers = IModularFeatures::Get().GetModularFeatureImplementations<IMotionController>(IMotionController::GetModularFeatureName());
-		for (auto MotionController : MotionControllers)
-		{
-			if (MotionController == nullptr)
-			{
-				continue;
-			}
+		return false;
+	}
 
-			CurrentTrackingStatus = MotionController->GetControllerTrackingStatus(PlayerIndex, MotionSource);
-			if (MotionController->GetControllerOrientationAndPosition(PlayerIndex, MotionSource, Orientation, Position, WorldToMetersScale))
+	// Query motion controllers
+	TArray<IMotionController*> MotionControllers = IModularFeatures::Get().GetModularFeatureImplementations<IMotionController>(IMotionController::GetModularFeatureName());
+	for (IMotionController* MotionController : MotionControllers)
+	{
+		if (!MotionController)
+		{
+			continue;
+		}
+
+		CurrentTrackingStatus = MotionController->GetControllerTrackingStatus(PlayerIndex, MotionSource);
+		if (MotionController->GetControllerOrientationAndPosition(PlayerIndex, MotionSource, Orientation, Position, WorldToMetersScale))
+		{
+			if (IsInGameThread())
 			{
-				if (IsInGameThread())
-				{
-					InUseMotionController = MotionController;
-					OnMotionControllerUpdated();
-					InUseMotionController = nullptr;
-				}
+				InUseMotionController = MotionController;
+				OnMotionControllerUpdated();
+				InUseMotionController = nullptr;
+			}
+			return true;
+		}
+	}
+
+	// Fallback to HMD tracking
+	if (MotionSource == FXRMotionControllerBase::HMDSourceId)
+	{
+		if (IXRTrackingSystem* TrackingSys = GEngine->XRSystem.Get())
+		{
+			FQuat OrientationQuat;
+			if (TrackingSys->GetCurrentPose(IXRTrackingSystem::HMDDeviceId, OrientationQuat, Position))
+			{
+				Orientation = OrientationQuat.Rotator();
 				return true;
 			}
 		}
-
-		if (MotionSource == FXRMotionControllerBase::HMDSourceId)
-		{
-			IXRTrackingSystem* TrackingSys = GEngine->XRSystem.Get();
-			if (TrackingSys)
-			{
-				FQuat OrientationQuat;
-				if (TrackingSys->GetCurrentPose(IXRTrackingSystem::HMDDeviceId, OrientationQuat, Position))
-				{
-					Orientation = OrientationQuat.Rotator();
-					return true;
-				}
-			}
-		}
 	}
+
 	return false;
 }
 
