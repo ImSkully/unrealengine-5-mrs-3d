@@ -266,18 +266,6 @@ namespace sl
 					return ESlErrorCode::EC_CUDAError;
 				case sl::ERROR_CODE::CAMERA_NOT_INITIALIZED: /**< In grab() only, ZED SDK is not initialized. Probably a missing call to sl::Camera::open.*/
 					return ESlErrorCode::EC_CameraNotInitialized;
-				case sl::ERROR_CODE::NVIDIA_DRIVER_OUT_OF_DATE: /**< Your NVIDIA driver is too old and not compatible with your current CUDA version. */
-					return ESlErrorCode::EC_NVIDIADriverOutOfDate;
-				case sl::ERROR_CODE::INVALID_FUNCTION_CALL: /**< The call of the function is not valid in the current context. Could be a missing call of sl::Camera::open. */
-					return ESlErrorCode::EC_InvalidFunctionCall;
-				case sl::ERROR_CODE::CORRUPTED_SDK_INSTALLATION: /**< The SDK wasn't able to load its dependencies or somes assets are missing, the installer should be launched. */
-					return ESlErrorCode::EC_CorruptedSDKInstallation;
-				case sl::ERROR_CODE::INCOMPATIBLE_SDK_VERSION: /**< The installed SDK is incompatible SDK used to compile the program. */
-					return ESlErrorCode::EC_IncompatibleSDKVersion;
-				case sl::ERROR_CODE::INVALID_AREA_FILE: /**< The given area file does not exist, check the path. */
-					return ESlErrorCode::EC_InvalidAreaFile;
-				case sl::ERROR_CODE::INCOMPATIBLE_AREA_FILE: /**< The area file does not contain enought data to be used or the sl::DEPTH_MODE used during the creation of the area file is different from the one currently set. */
-					return ESlErrorCode::EC_IncompatibleAreaFile;
 				case sl::ERROR_CODE::CAMERA_FAILED_TO_SETUP: /**< Failed to open the camera at the proper resolution. Try another resolution or make sure that the UVC driver is properly installed.*/
 					return ESlErrorCode::EC_CameraFailedToSetup;
 				case sl::ERROR_CODE::CAMERA_DETECTION_ISSUE: /**< Your ZED can not be opened, try replugging it to another USB port or flipping the USB-C connector.*/
@@ -561,7 +549,6 @@ namespace sl
 				}		
 			}
 		}
-
 		/*
 		 * Convert from ESlMeasure to sl::MEASURE
 		 */
@@ -604,11 +591,8 @@ namespace sl
 				case ESlMeasure::M_Confidence:
 					return sl::MEASURE::CONFIDENCE;
 				default:
-				{
 					ensureMsgf(false, TEXT("Unhandled ESlMeasure entry %u"), (uint32)UnrealType);
-
 					return (sl::MEASURE)0;
-				}
 			}
 		}
 
@@ -620,7 +604,7 @@ namespace sl
 			switch (UnrealType)
 			{
 				case ESlView::V_Left:
-					return  sl::VIEW::LEFT;
+					return sl::VIEW::LEFT;
 				case ESlView::V_Right:
 					return sl::VIEW::RIGHT;
 				case ESlView::V_LeftUnrectified:
@@ -648,16 +632,13 @@ namespace sl
 				case ESlView::V_NormalsRight:
 					return sl::VIEW::NORMALS_RIGHT;
 				default:
-				{
 					ensureMsgf(false, TEXT("Unhandled ESlView entry %u"), (uint32)UnrealType);
-
 					return (sl::VIEW)0;
-				}
 			}
 		}
-		
+
 		/*
-		 * Convert from EStereoRenderingDeviceType to sl::mr::HMD_DEVICE_TYPE
+		 * Convert from FName to sl::mr::HMD_DEVICE_TYPE
 		 */
 		FORCEINLINE sl::mr::HMD_DEVICE_TYPE ToSlType(FName UnrealType)
 		{
@@ -665,15 +646,13 @@ namespace sl
 			{
 				return sl::mr::HMD_DEVICE_TYPE::HMD_DEVICE_TYPE_HTC;
 			}
-			else if (UnrealType == TEXT("OculusHMD"))
+			if (UnrealType == TEXT("OculusHMD"))
 			{
 				return sl::mr::HMD_DEVICE_TYPE::HMD_DEVICE_TYPE_OCULUS;
 			}
-			else
-			{
-				ensureMsgf(false, TEXT("Unhandled HMD device type FName entry"));
-				return sl::mr::HMD_DEVICE_TYPE::HMD_DEVICE_TYPE_UNKNOWN;
-			}
+			
+			ensureMsgf(false, TEXT("Unhandled HMD device type FName entry"));
+			return sl::mr::HMD_DEVICE_TYPE::HMD_DEVICE_TYPE_UNKNOWN;
 		}
 
 		/*
@@ -943,14 +922,14 @@ namespace sl
 					return sl::MAT_TYPE::F32_C1;
 				case ESlMatType::MT_32F_C2:
 					return sl::MAT_TYPE::F32_C2;
-				case ESlMatType::MT_32F_C3:
-					return sl::MAT_TYPE::F32_C3;
-				case  ESlMatType::MT_32F_C4:
-					return sl::MAT_TYPE::F32_C4;
-				case ESlMatType::MT_8U_C1:
-					return sl::MAT_TYPE::U8_C1;
-				case ESlMatType::MT_8U_C2:
-					return sl::MAT_TYPE::U8_C2;
+				// case ESlMatType::MT_32F_C3:
+				// 	return sl::MAT_TYPE::F32_C3;
+				// case  ESlMatType::MT_32F_C4:
+				// 	return sl::MAT_TYPE::F32_C4;
+				// case ESlMatType::MT_8U_C1:
+				// 	return sl::MAT_TYPE::U8_C1;
+				// case ESlMatType::MT_8U_C2:
+					// return sl::MAT_TYPE::U8_C2;
 				case ESlMatType::MT_8U_C3:
 					return sl::MAT_TYPE::U8_C3;
 				case ESlMatType::MT_8U_C4:
@@ -1238,7 +1217,7 @@ namespace sl
 			RecordingState.CurrentCompressionRatio = SlData.current_compression_ratio;
 			RecordingState.AverageCompressionTime = SlData.average_compression_time;
 			RecordingState.AverageCompressionRatio = SlData.average_compression_ratio;
-			RecordingState.Status = SlData.status;
+			// RecordingState.Status = SlData.status; // TO DO: missing in sl::RecordingStatus
 
 			return RecordingState;
 		}
@@ -1569,7 +1548,7 @@ namespace sl
 			sl::CalibrationParameters CalibrationParameters;
 
 			CalibrationParameters.left_cam = sl::unreal::ToSlType(UnrealData.LeftCameraParameters);
-			CalibrationParameters.left_cam = sl::unreal::ToSlType(UnrealData.RightCameraParameters);
+			CalibrationParameters.right_cam = sl::unreal::ToSlType(UnrealData.RightCameraParameters);
 			CalibrationParameters.R = sl::unreal::ToSlType(UnrealData.Rotation);
 			CalibrationParameters.T = sl::unreal::ToSlType(UnrealData.Translation);
 
