@@ -191,4 +191,3 @@ Contributions are welcome! Please feel free to submit pull requests or open issu
 
 ## Support
 For issues and questions, please open an issue on the GitHub repository.
-

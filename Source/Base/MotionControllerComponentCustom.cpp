@@ -39,45 +39,62 @@ namespace {
 
 void UMotionControllerComponentCustom::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
-	UPrimitiveComponent::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (bIsActive)
+	if (!bIsActive)
 	{
-		FVector Position;
-		FRotator Orientation;
-		float WorldToMeters = GetWorld() ? GetWorld()->GetWorldSettings()->WorldToMeters : 100.0f;
-		const bool bNewTrackedState = PollControllerState(Position, Orientation, WorldToMeters);
-		if (bNewTrackedState)
-		{
-			auto VRPawn = CastChecked<AVRPawn>(GetAttachmentRootActor());
-			TUniquePtr<FScopeLock> Lock = MakeUnique<FScopeLock>(&VRPawn->TransformCrit);
-			FTransform Camera = VRPawn->Camera->GetComponentToWorld();
-			Lock.Reset();
+		return;
+	}
 
-			auto XRSystem = GEngine->XRSystem;
-			if (XRSystem.Get()->GetXRCamera().IsValid() &&
-				XRSystem->IsHeadTrackingAllowed()) {
-				FVector Pos;
-				FQuat Or;
-				XRSystem.Get()->GetXRCamera()->UpdatePlayerCamera(Or, Pos);
-				FTransform HMD = FTransform(Or, Pos);
-				FTransform Controller = FTransform(Orientation, Position);
-				SetWorldTransform(Controller.GetRelativeTransform(HMD) * Camera);
+	FVector Position;
+	FRotator Orientation;
+	const float WorldToMeters = GetWorld() ? GetWorld()->GetWorldSettings()->WorldToMeters : 100.0f;
+	const bool bNewTrackedState = PollControllerState(Position, Orientation, WorldToMeters);
+	
+	if (bNewTrackedState)
+	{
+		AVRPawn* VRPawn = Cast<AVRPawn>(GetAttachmentRootActor());
+		if (!VRPawn)
+		{
+			return;
+		}
+
+		FTransform WorldTransform;
+		{
+			FScopeLock Lock(&VRPawn->TransformCrit);
+			const FTransform CameraTransform = VRPawn->Camera->GetComponentToWorld();
+			
+			if (TSharedPtr<IXRTrackingSystem, ESPMode::ThreadSafe> XRSystem = GEngine->XRSystem)
+			{
+				TSharedPtr<IXRCamera, ESPMode::ThreadSafe> XRCamera = XRSystem->GetXRCamera();
+				if (XRCamera.IsValid() && XRSystem->IsHeadTrackingAllowed())
+				{
+					FQuat HMDOrientation;
+					FVector HMDPosition;
+					XRCamera->UpdatePlayerCamera(HMDOrientation, HMDPosition);
+					
+					const FTransform HMDTransform(HMDOrientation, HMDPosition);
+					const FTransform ControllerTransform(Orientation, Position);
+					WorldTransform = ControllerTransform.GetRelativeTransform(HMDTransform) * CameraTransform;
+				}
 			}
-
 		}
+		
+		SetWorldTransform(WorldTransform);
+	}
 
-		// if controller tracking just kicked in
-		if (!bTracked && bNewTrackedState && bDisplayDeviceModel && DisplayModelSource != UMotionControllerComponent::CustomModelSourceId)
-		{
-			RefreshDisplayComponent();
-		}
-		bTracked = bNewTrackedState;
+	// Refresh display model when tracking begins
+	if (!bTracked && bNewTrackedState && bDisplayDeviceModel && DisplayModelSource != UMotionControllerComponent::CustomModelSourceId)
+	{
+		RefreshDisplayComponent();
+	}
+	
+	bTracked = bNewTrackedState;
 
-		if (!ViewExtension.IsValid() && GEngine)
-		{
-			ViewExtension = FSceneViewExtensions::NewExtension<FViewExtension>(this);
-		}
+	// Initialize view extension for late updates
+	if (!ViewExtension.IsValid() && GEngine)
+	{
+		ViewExtension = FSceneViewExtensions::NewExtension<FViewExtension>(this);
 	}
 }
 
