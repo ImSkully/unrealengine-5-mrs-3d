@@ -686,13 +686,13 @@ void UMyGameInstanceCode::RenderRoom(ADoor * Door)
 		switch (Segment.DirectionInt)
 		{
 		case EntranceDirectionClass::MINUS_Y:
-			Rotation.Yaw = 270.f;
+			Rotation = FRotator(0, 270, 0);
 			break;
 		case EntranceDirectionClass::PLUS_X:
 			Rotation.Yaw = 180.f;
 			break;
 		case EntranceDirectionClass::PLUS_Y:
-			Rotation.Yaw = 90.f;
+			Rotation = FRotator(0, 90, 0);
 			break;
 		}
 
