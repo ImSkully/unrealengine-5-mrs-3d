@@ -686,13 +686,13 @@ void UMyGameInstanceCode::RenderRoom(ADoor * Door)
 		switch (Segment.DirectionInt)
 		{
 		case EntranceDirectionClass::MINUS_Y:
-			Rotation.Yaw = 90.f;
+			Rotation.Yaw = 270.f;
 			break;
 		case EntranceDirectionClass::PLUS_X:
 			Rotation.Yaw = 180.f;
 			break;
 		case EntranceDirectionClass::PLUS_Y:
-			Rotation.Yaw = 270.f;
+			Rotation.Yaw = 90.f;
 			break;
 		}
 
@@ -1011,8 +1011,6 @@ void UMyGameInstanceCode::Tick(float DeltaTime)
 
 	TUniquePtr<FScopeLock> ObstacleDetectionLock = MakeUnique<FScopeLock>(&DynamicObstacleDetection);//RoomCells is not Thread Safe - Mutex Lock
 
-	AnimateObstacles(RoomCells);
-
 	for (auto& Door : DoorsOverlapped)
 	{
 		AnimateObstacles(Door->RoomCells);
@@ -1043,8 +1041,8 @@ void UMyGameInstanceCode::BeginDestroy()
 	if (!BootRendererRetrieved)
 		BootRenderer.SetValue();
 
-	//if(IsValid(LoadingWidget)) LoadingWidget->RemoveFromParent();
-	//if(IsValid(ErrorWidget)) ErrorWidget->RemoveFromParent();
+	if(IsValid(ErrorWidget)) ErrorWidget->RemoveFromParent();
+	if(IsValid(LoadingWidget)) LoadingWidget->RemoveFromParent();
 }
 
 bool UMyGameInstanceCode::IsTickable() const
@@ -1113,6 +1111,8 @@ FTransform UMyGameInstanceCode::GetPlayerTransform()
 		FScopeLock Lock(&PlayerCharacter->TransformCrit);
 		return PlayerCharacter->Camera->GetComponentToWorld();
 	}
+
+	UE_LOG(LogTemp, Error, TEXT("Player Character not valid"));
 	return FTransform();
 }
 
@@ -1190,6 +1190,8 @@ void UMyGameInstanceCode::ToggleVisibility(ADoor* Door, bool SameSide)
 			if (Loc.X == Pos.X)
 			{
 				Actor->SetActorHiddenInGame(true);
+				Actor->SetActorEnableCollision(false);
+				Actor->SetActorTickEnabled(false);
 			}
 		}
 		else
@@ -1197,6 +1199,7 @@ void UMyGameInstanceCode::ToggleVisibility(ADoor* Door, bool SameSide)
 			if (Loc.Y == Pos.Y)
 			{
 				Actor->SetActorHiddenInGame(true);
+				Actor->SetActorEnableCollision(false);
 			}
 		}
 	}
@@ -1251,6 +1254,7 @@ void UMyGameInstanceCode::ObstacleDetection(sl::Pose& Pose)
 		for (int i = 0; i < input.size(); i++)
 		{
 			output[i].GlobalMappingInformation = input[i];
+			output[i].CounterPrevFrame = input[i].counter;
 		}
 	};
 
@@ -1316,7 +1320,9 @@ void UMyGameInstanceCode::HumanDetection(std::vector<std::pair<int, sl::float2>>
 
 	for (auto& Element : result)
 	{
+		// Create a new HumanInformation object and populate it
 		Humans.emplace_back();
+		Humans.back().TrackState = HumanInformation::State::New;
 		Humans.back().TrackID = Element.first;
 		Humans.back().Position = sl::unreal::ToUnrealType(Element.second);
 	}
