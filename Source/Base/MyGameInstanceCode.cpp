@@ -418,26 +418,7 @@ void UMyGameInstanceCode::GlobalMapping()
 		tracking_parameters.enable_pose_smoothing = true;
 		//tracking_parameters.initial_world_transform.setEulerAngles(sl::float3(0, 80, 0), false);
 
-		//count = 0;
-		//do
-		//{
-			err = zed.enablePositionalTracking(tracking_parameters);
-		//	count++;
-		//	FPlatformProcess::SleepNoStats(0.1);
-		//} while (err != sl::ERROR_CODE::SUCCESS && count < 5);
-
-
-		//If Camera's Positional Tracking cannot be enabled
-		//if (err != sl::ERROR_CODE::SUCCESS)
-		//{
-		//	this->ErrorWidget->Message = FText::FromString("Positional Tracking Failed. Please Restart...");
-		//	//this->ErrorWidget->AddToViewport(1);
-		//	//this->LoadingWidget->RemoveFromViewport();
-		//	Player->SetWidget(ErrorWidget);
-		//	FPlatformProcess::SleepNoStats(3.f);
-		//	ReleaseMutexes();
-		//	return;
-		//}
+		err = zed.enablePositionalTracking(tracking_parameters);
 		this->LoadingWidget->Message = FText::FromString("Camera Connected. Please Wait.");
 
 		//Setting up Camera's runtime parameters for image capturing
@@ -669,134 +650,98 @@ void UMyGameInstanceCode::RenderRoomOnLoad(TArray<FRenderingInformation> Segment
 void UMyGameInstanceCode::RenderRoom(ADoor * Door)
 {
 	TUniquePtr<FScopeLock> LockSegments = MakeUnique<FScopeLock>(&Door->SegmentsSection);
-	//TArray<FRenderingInformation> Segments = Door->Segments;
+	
 	if (Door->Segments.Num() == 0)
 		return;
 
-	auto Pos = FVector2D(Door->GetActorLocation().X, Door->GetActorLocation().Y);
-	auto Norm = FVector2D(Door->GetActorRightVector().X, Door->GetActorRightVector().Y);
+	const FVector2D DoorPos(Door->GetActorLocation().X, Door->GetActorLocation().Y);
+	const FVector2D DoorNorm(Door->GetActorRightVector().X, Door->GetActorRightVector().Y);
+	const bool bCheckX = DoorNorm.Y > DoorNorm.X;
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	float minX = FGenericPlatformMath::Min(Door->Segments[0].PointA.X, Door->Segments[0].PointB.X);
-	float minY = FGenericPlatformMath::Min(Door->Segments[0].PointA.Y, Door->Segments[0].PointB.Y);
-	float maxX = FGenericPlatformMath::Max(Door->Segments[0].PointA.X, Door->Segments[0].PointB.X);;
-	float maxY = FGenericPlatformMath::Max(Door->Segments[0].PointA.Y, Door->Segments[0].PointB.Y);
+	float minX = Door->Segments[0].PointA.X;
+	float minY = Door->Segments[0].PointA.Y;
+	float maxX = Door->Segments[0].PointB.X;
+	float maxY = Door->Segments[0].PointB.Y;
+	
+	if (minX > maxX) Swap(minX, maxX);
+	if (minY > maxY) Swap(minY, maxY);
 
-	for (size_t i = 0; i < Door->Segments.Num(); i++)
+	const int32 NumSegments = Door->Segments.Num();
+	Door->NewRoomActors.Reserve(NumSegments * 2 + 2); // Pre-allocate for walls, torches, ceiling, floor
+
+	const float WallHeightHalf = WallHeight * 0.5f;
+	const float WallHeightScale = WallHeight * 0.01f;
+	const float TorchHeight = WallHeightHalf * 0.8f;
+	constexpr float WallThickness = 0.15f;
+	constexpr float InvHundred = 0.01f;
+
+	for (int32 i = 0; i < NumSegments; ++i)
 	{
-		FVector2D Loc = (Door->Segments[i].PointA + Door->Segments[i].PointB) / 2;
-		//FRotator Rotation(0, (Door->Segments[i].PointA.X == Door->Segments[i].PointB.X) ? 0 : 90, 0);
-		FRotator Rotation;
-		switch (Door->Segments[i].DirectionInt)
+		const auto& Segment = Door->Segments[i];
+		const FVector2D Loc = (Segment.PointA + Segment.PointB) * 0.5f;
+		
+		// Calculate rotation once
+		FRotator Rotation = FRotator::ZeroRotator;
+		switch (Segment.DirectionInt)
 		{
-		case EntranceDirectionClass::MINUS_X:
-			Rotation = FRotator::ZeroRotator;
-			break;
 		case EntranceDirectionClass::MINUS_Y:
-			Rotation = FRotator(0, 90, 0);
+			Rotation.Yaw = 90.f;
 			break;
 		case EntranceDirectionClass::PLUS_X:
-			Rotation = FRotator(0, 180, 0);
+			Rotation.Yaw = 180.f;
 			break;
 		case EntranceDirectionClass::PLUS_Y:
-			Rotation = FRotator(0, 270, 0);
+			Rotation.Yaw = 270.f;
 			break;
 		}
-		float length = ((Door->Segments[i].PointA - Door->Segments[i].PointB).Size()) / 100.f;
-		FVector Scale = FVector(0.15, length, WallHeight/100.0f);
 
-		auto Tracer = [Loc, Pos, Norm](AActor* Object)
+		const float SegmentLength = (Segment.PointA - Segment.PointB).Size() * InvHundred;
+		const FVector Scale(WallThickness, SegmentLength, WallHeightScale);
+
+		if (Segment.IsWall)
 		{
-			if (Norm.Y > Norm.X)
-			{
-				if (Loc.X == Pos.X)
-				{
-					Object->SetActorHiddenInGame(true);
-				}
-			}
-			else
-			{
-				if (Loc.Y == Pos.Y)
-				{
-					Object->SetActorHiddenInGame(true);
-				}
-			}
-		};
+			AActor* Wall = GetWorld()->SpawnActor<AActor>(WallClass, FVector(Loc, WallHeightHalf), Rotation, SpawnParameters);
+			Wall->SetActorScale3D(Scale);
+			Door->NewRoomActors.Add(Wall);
 
-		if (Door->Segments[i].IsWall)
-		{
-			AActor* Object;
-			Object = GetWorld()->SpawnActor<AActor>(WallClass, FVector(Loc, WallHeight/2.f), Rotation, SpawnParameters);
-			Object->SetActorScale3D(Scale);
-			Door->NewRoomActors.Add(Object);
-
-			AActor* Torch;
-			Torch = GetWorld()->SpawnActor<AActor>(TorchClass, FVector(Loc, 0.8 * WallHeight / 2.f), Rotation, SpawnParameters);
+			AActor* Torch = GetWorld()->SpawnActor<AActor>(TorchClass, FVector(Loc, TorchHeight), Rotation, SpawnParameters);
 			Door->NewRoomActors.Add(Torch);
-			//Tracer(Object);
 		}
 		else
 		{
-			ADoor* Object;
-			Object = Cast<ADoor>(UGameplayStatics::BeginDeferredActorSpawnFromClass(this, DoorClass, FTransform(Rotation, FVector(Loc, 0), FVector::OneVector)));
-			if (Object)
+			ADoor* NewDoor = Cast<ADoor>(UGameplayStatics::BeginDeferredActorSpawnFromClass(
+				this, DoorClass, FTransform(Rotation, FVector(Loc, 0), FVector::OneVector)));
+			if (NewDoor)
 			{
-				Object->Direction = Door->Segments[i].DirectionInt;
-				Door->NewRoomActors.Add(Object);
-				UGameplayStatics::FinishSpawningActor(Object, FTransform(Rotation, FVector(Loc, 0), FVector::OneVector));
+				NewDoor->Direction = Segment.DirectionInt;
+				Door->NewRoomActors.Add(NewDoor);
+				UGameplayStatics::FinishSpawningActor(NewDoor, FTransform(Rotation, FVector(Loc, 0), FVector::OneVector));
 			}
-			//Tracer(Object);
 		}
 
-		if (Door->Segments[i].PointA.X < minX)
-		{
-			minX = Door->Segments[i].PointA.X;
-		}
-		else if (Door->Segments[i].PointA.X > maxX)
-		{
-			maxX = Door->Segments[i].PointA.X;
-		}
-
-		if (Door->Segments[i].PointA.Y < minY)
-		{
-			minY = Door->Segments[i].PointA.Y;
-		}
-		else if (Door->Segments[i].PointA.Y > maxY)
-		{
-			maxY = Door->Segments[i].PointA.Y;
-		}
-
+		// Update bounds
+		minX = FMath::Min(minX, FMath::Min(Segment.PointA.X, Segment.PointB.X));
+		maxX = FMath::Max(maxX, FMath::Max(Segment.PointA.X, Segment.PointB.X));
+		minY = FMath::Min(minY, FMath::Min(Segment.PointA.Y, Segment.PointB.Y));
+		maxY = FMath::Max(maxY, FMath::Max(Segment.PointA.Y, Segment.PointB.Y));
 	}
 
 	LockSegments.Reset();
 
-	FVector4 v4(minX, minY, maxX, maxY);
-	UE_LOG(LogTemp, Error, TEXT("minx, miny, maxx, maxy is: %s"), *v4.ToString());
+	const FVector CenterPos((maxX + minX) * 0.5f, (maxY + minY) * 0.5f, 0.f);
+	const FVector RoomScale((maxX - minX) * InvHundred, (maxY - minY) * InvHundred, 1.f);
 
-	//for (float x = minX; x <= maxX; x += 64.f)
-	//{
-	//	for (float y = minY; y <= maxY; y += 64.f)
-	//	{
-	//		FTransform Transform(FRotator::ZeroRotator, FVector(x, y, 0), FVector::OneVector);
-
-	//		auto TileObject = GetWorld()->SpawnActor<AActor>(FloorClass, FVector(x, y, 0), FRotator::ZeroRotator);
-
-	//		Door->NewRoomActors.Add(TileObject);
-	//	}
-	//}
-
-	// Ceiling construction
-	AActor* Ceiling;
-	Ceiling = GetWorld()->SpawnActor<AActor>(CeilingClass, FVector((maxX + minX) / 2.f, (maxY + minY) / 2.f, WallHeight), FRotator::ZeroRotator, SpawnParameters);
-	Ceiling->SetActorScale3D(FVector((maxX - minX) / 100.f, (maxY - minY) / 100.f, 1));
+	// Spawn ceiling
+	AActor* Ceiling = GetWorld()->SpawnActor<AActor>(CeilingClass, CenterPos + FVector(0.f, 0.f, WallHeight), FRotator::ZeroRotator, SpawnParameters);
+	Ceiling->SetActorScale3D(RoomScale);
 	Door->NewRoomActors.Add(Ceiling);
 
-	AActor* Floor;
-	Floor = GetWorld()->SpawnActor<AActor>(FloorClass, FVector((maxX + minX) / 2.f, (maxY + minY) / 2.f, 0),
-		FRotator::ZeroRotator, SpawnParameters);
-	Floor->SetActorScale3D(FVector((maxX - minX) / 100.f, (maxY - minY) / 100.f, 1));
+	// Spawn floor
+	AActor* Floor = GetWorld()->SpawnActor<AActor>(FloorClass, CenterPos, FRotator::ZeroRotator, SpawnParameters);
+	Floor->SetActorScale3D(RoomScale);
 	Door->NewRoomActors.Add(Floor);
 }
 
@@ -1068,12 +1013,12 @@ void UMyGameInstanceCode::Tick(float DeltaTime)
 
 	TUniquePtr<FScopeLock> ObstacleDetectionLock = MakeUnique<FScopeLock>(&DynamicObstacleDetection);//RoomCells is not Thread Safe - Mutex Lock
 
-	//AnimateObstacles(RoomCells);
+	AnimateObstacles(RoomCells);
 
-	//for (auto& Door : DoorsOverlapped)
-	//{
-	//	AnimateObstacles(Door->RoomCells);
-	//}
+	for (auto& Door : DoorsOverlapped)
+	{
+		AnimateObstacles(Door->RoomCells);
+	}
 
 	ObstacleDetectionLock.Reset();
 
