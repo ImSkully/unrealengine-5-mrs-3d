@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Copyright (c) MIT License
 
 #include "MotionControllerComponentCustom.h"
 #include "GameFramework/Pawn.h"
