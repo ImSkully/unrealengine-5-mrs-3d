@@ -695,13 +695,13 @@ void UMyGameInstanceCode::RenderRoom(ADoor * Door)
 			Rotation = FRotator::ZeroRotator;
 			break;
 		case EntranceDirectionClass::MINUS_Y:
-			Rotation = FRotator(0, 90, 0);
+			Rotation = FRotator(0, 270, 0);
 			break;
 		case EntranceDirectionClass::PLUS_X:
 			Rotation = FRotator(0, 180, 0);
 			break;
 		case EntranceDirectionClass::PLUS_Y:
-			Rotation = FRotator(0, 270, 0);
+			Rotation = FRotator(0, 90, 0);
 			break;
 		}
 		float length = ((Door->Segments[i].PointA - Door->Segments[i].PointB).Size()) / 100.f;
@@ -1068,12 +1068,10 @@ void UMyGameInstanceCode::Tick(float DeltaTime)
 
 	TUniquePtr<FScopeLock> ObstacleDetectionLock = MakeUnique<FScopeLock>(&DynamicObstacleDetection);//RoomCells is not Thread Safe - Mutex Lock
 
-	//AnimateObstacles(RoomCells);
-
-	//for (auto& Door : DoorsOverlapped)
-	//{
-	//	AnimateObstacles(Door->RoomCells);
-	//}
+	for (auto& Door : DoorsOverlapped)
+	{
+		AnimateObstacles(Door->RoomCells);
+	}
 
 	ObstacleDetectionLock.Reset();
 
@@ -1100,8 +1098,8 @@ void UMyGameInstanceCode::BeginDestroy()
 	if (!BootRendererRetrieved)
 		BootRenderer.SetValue();
 
-	//if(IsValid(LoadingWidget)) LoadingWidget->RemoveFromParent();
-	//if(IsValid(ErrorWidget)) ErrorWidget->RemoveFromParent();
+	if(IsValid(ErrorWidget)) ErrorWidget->RemoveFromParent();
+	if(IsValid(LoadingWidget)) LoadingWidget->RemoveFromParent();
 }
 
 bool UMyGameInstanceCode::IsTickable() const
@@ -1170,6 +1168,8 @@ FTransform UMyGameInstanceCode::GetPlayerTransform()
 		FScopeLock Lock(&PlayerCharacter->TransformCrit);
 		return PlayerCharacter->Camera->GetComponentToWorld();
 	}
+
+	UE_LOG(LogTemp, Error, TEXT("Player Character not valid"));
 	return FTransform();
 }
 
@@ -1247,6 +1247,8 @@ void UMyGameInstanceCode::ToggleVisibility(ADoor* Door, bool SameSide)
 			if (Loc.X == Pos.X)
 			{
 				Actor->SetActorHiddenInGame(true);
+				Actor->SetActorEnableCollision(false);
+				Actor->SetActorTickEnabled(false);
 			}
 		}
 		else
@@ -1254,6 +1256,7 @@ void UMyGameInstanceCode::ToggleVisibility(ADoor* Door, bool SameSide)
 			if (Loc.Y == Pos.Y)
 			{
 				Actor->SetActorHiddenInGame(true);
+				Actor->SetActorEnableCollision(false);
 			}
 		}
 	}
@@ -1308,6 +1311,7 @@ void UMyGameInstanceCode::ObstacleDetection(sl::Pose& Pose)
 		for (int i = 0; i < input.size(); i++)
 		{
 			output[i].GlobalMappingInformation = input[i];
+			output[i].CounterPrevFrame = input[i].counter;
 		}
 	};
 
@@ -1373,7 +1377,9 @@ void UMyGameInstanceCode::HumanDetection(std::vector<std::pair<int, sl::float2>>
 
 	for (auto& Element : result)
 	{
+		// Create a new HumanInformation object and populate it
 		Humans.emplace_back();
+		Humans.back().TrackState = HumanInformation::State::New;
 		Humans.back().TrackID = Element.first;
 		Humans.back().Position = sl::unreal::ToUnrealType(Element.second);
 	}

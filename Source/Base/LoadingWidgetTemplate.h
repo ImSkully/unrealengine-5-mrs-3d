@@ -18,10 +18,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Text")
 	FText Message;
 
-	//UFUNCTION(BlueprintCallable)
-	//FText GetDisplayText() const;
+	UFUNCTION(BlueprintCallable)
+	FText GetDisplayText() const;
 
-	//UFUNCTION(BlueprintCallable)
-	//void SetDisplayText(const FText& NewDisplayText);
+	UFUNCTION(BlueprintCallable)
+	void SetDisplayText(const FText& NewDisplayText);
 	
 };
