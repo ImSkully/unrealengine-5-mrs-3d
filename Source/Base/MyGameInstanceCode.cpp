@@ -431,31 +431,29 @@ void UMyGameInstanceCode::GlobalMapping()
 		bool StartLevel = false;
 		constexpr unsigned int ObjDetectionFrameFreq = 3;
 		unsigned long ObjDetectionTrigger = ObjDetectionFrameFreq - 1;
-		//sl::POSITIONAL_TRACKING_STATE tracking_state;
+		sl::POSITIONAL_TRACKING_STATE tracking_state;
 
 		ToBreak = EndGameTrigger();
-		while (zed.getSVOPosition() <= zed.getSVONumberOfFrames() && !ToBreak)//comment out SVO condition on NDEBUG
+		while (zed.getSVOPosition() <= zed.getSVONumberOfFrames() && !ToBreak)
 		{
 			auto start = std::chrono::high_resolution_clock::now();
 			auto err = zed.grab(runtime_parameters);
 			if (err == sl::ERROR_CODE::SUCCESS)
 			{
 				sl::Pose zed_pose;
-				auto WorldTransform = GetPlayerTransform();//Taking Tracking Info from HMD
+				auto WorldTransform = GetPlayerTransform(); //Taking Tracking Info from HMD
 
-				//To comment out if tracking taken from the HMD
-				//sl::POSITIONAL_TRACKING_STATE tracking_state;
-				//tracking_state = zed.getPosition(zed_pose, REFERENCE_FRAME::WORLD);
+				sl::POSITIONAL_TRACKING_STATE tracking_state;
+				tracking_state = zed.getPosition(zed_pose, REFERENCE_FRAME::WORLD);
 
-				//if (tracking_state != sl::POSITIONAL_TRACKING_STATE::OK)
-				//	continue;
-				//auto WorldTransform = sl::unreal::ToUnrealType(sl::Transform(zed_pose.getOrientation(), zed_pose.getTranslation()));
-				//float translation_left_to_center = zed.getCameraInformation().calibration_parameters.T.x * 0.5f;
-				//GM::Utilities::transformPose(zed_pose.pose_data, translation_left_to_center);
+				if (tracking_state != sl::POSITIONAL_TRACKING_STATE::OK)
+					continue;
+				auto WorldTransform = sl::unreal::ToUnrealType(sl::Transform(zed_pose.getOrientation(), zed_pose.getTranslation()));
+				float translation_left_to_center = zed.getCameraInformation().calibration_parameters.T.x * 0.5f;
+				GM::Utilities::transformPose(zed_pose.pose_data, translation_left_to_center);
 
-				//ZED Tracking for Full Body Room Scale IK
-				//CastChecked<AFirstPersonBase>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0))->TrackBodyIK(zed_pose);
-				//End of comment out if tracking taken from the HMD
+				ZED Tracking for Full Body Room Scale IK
+				CastChecked<AFirstPersonBase>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0))->TrackBodyIK(zed_pose);
 
 				if (ObjectDetection && ++ObjDetectionTrigger == ObjDetectionFrameFreq)
 				{
