@@ -57,3 +57,7 @@ Build/
 Plugins/*/Binaries/
 Plugins/*/Intermediate/
 Plugins/*/Build/
+
+# Distribution
+*.app
+dist/*
