@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "BitmapPoint.h"
+#include "PlaneDetection.h"
 #include "MRBitmapMapper.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnBitmapPointsUpdated, const TArray<FBitmapPoint>&, BitmapPoints);
@@ -88,6 +89,30 @@ public:
 	void ForceCleanup();
 
 	/**
+	 * Enable/disable automatic plane detection from point clouds
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	void SetAutoPlaneDetectionEnabled(bool bEnabled);
+
+	/**
+	 * Manually trigger plane detection from current points
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	TArray<FDetectedPlane> DetectPlanesFromCurrentPoints(float PlaneThickness = 0.1f);
+
+	/**
+	 * Update AR/MR tracking state
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	void UpdateARTrackingState(ETrackingState NewState, float Quality = 1.0f, const FString& LossReason = TEXT(""));
+
+	/**
+	 * Get current AR/MR tracking state
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	ETrackingState GetCurrentTrackingState() const;
+
+	/**
 	 * Event fired when bitmap points are updated
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "MRS3D|MR")
@@ -116,8 +141,23 @@ protected:
 	// Internal cleanup tracking
 	float LastCleanupTime;
 
+	// Plane detection settings
+	UPROPERTY(Config)
+	bool bAutoPlaneDetectionEnabled;
+
+	UPROPERTY(Config)
+	float PlaneDetectionInterval;
+
+	UPROPERTY(Config)
+	int32 MinPointsForPlaneDetection;
+
+	// Internal plane detection tracking
+	float LastPlaneDetectionTime;
+	ETrackingState CurrentTrackingState;
+
 	void BroadcastUpdate();
 	void PerformAutoCleanup();
 	void RemoveExcessPoints();
 	void RemovePointsByAge(float CurrentTime);
+	void PerformAutoPlaneDetection();
 };
