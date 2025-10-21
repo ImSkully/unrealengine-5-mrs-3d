@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "ProceduralMeshComponent.h"
 #include "BitmapPoint.h"
+#include "MarchingCubes.h"
 #include "ProceduralGenerator.generated.h"
 
 UENUM(BlueprintType)
@@ -12,7 +13,8 @@ enum class EProceduralGenerationType : uint8
 	PointCloud UMETA(DisplayName = "Point Cloud"),
 	Mesh UMETA(DisplayName = "Mesh"),
 	Voxel UMETA(DisplayName = "Voxel"),
-	Surface UMETA(DisplayName = "Surface")
+	Surface UMETA(DisplayName = "Surface"),
+	MarchingCubes UMETA(DisplayName = "Marching Cubes")
 };
 
 /**
@@ -25,6 +27,7 @@ class FMRS3DPLUGIN_API UProceduralGenerator : public UActorComponent
 
 public:	
 	UProceduralGenerator();
+	virtual ~UProceduralGenerator();
 
 protected:
 	virtual void BeginPlay() override;
@@ -83,6 +86,28 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Procedural")
 	UMaterialInterface* DefaultMaterial;
 
+	// Marching Cubes Configuration
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|MarchingCubes")
+	FMarchingCubesConfig MarchingCubesConfig;
+
+	/**
+	 * Set marching cubes configuration
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
+	void SetMarchingCubesConfig(const FMarchingCubesConfig& NewConfig);
+
+	/**
+	 * Generate mesh using marching cubes algorithm
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
+	void GenerateMarchingCubes(const TArray<FBitmapPoint>& Points);
+
+	/**
+	 * Update marching cubes grid bounds automatically from points
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
+	void UpdateGridBoundsFromPoints(const TArray<FBitmapPoint>& Points, float Padding = 100.0f);
+
 protected:
 	UPROPERTY()
 	UProceduralMeshComponent* ProceduralMesh;
@@ -90,12 +115,17 @@ protected:
 	UPROPERTY()
 	TArray<FBitmapPoint> CachedPoints;
 
+	// Marching cubes generator
+	FMarchingCubesGenerator* MarchingCubesGenerator;
+
 	float TimeSinceLastUpdate;
 
 	void GeneratePointCloud(const TArray<FBitmapPoint>& Points);
 	void GenerateMesh(const TArray<FBitmapPoint>& Points);
 	void GenerateVoxels(const TArray<FBitmapPoint>& Points);
 	void GenerateSurface(const TArray<FBitmapPoint>& Points);
+	void GenerateMarchingCubesInternal(const TArray<FBitmapPoint>& Points);
 	
 	void CreateProceduralMeshIfNeeded();
+	void ConvertMCTrianglesToMesh(const TArray<FMCTriangle>& MCTriangles);
 };

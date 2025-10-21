@@ -79,6 +79,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
 	void SimulatePlaneDetection();
 
+	/**
+	 * Set marching cubes configuration
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
+	void SetMarchingCubesConfig(const FMarchingCubesConfig& Config);
+
+	/**
+	 * Generate mesh using marching cubes
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
+	void GenerateWithMarchingCubes();
+
+	/**
+	 * Switch to marching cubes generation mode
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
+	void EnableMarchingCubesGeneration(bool bEnable = true);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Gameplay")
 	UProceduralGenerator* ProceduralGenerator;
 

@@ -9,8 +9,25 @@ UProceduralGenerator::UProceduralGenerator()
 	, bAutoUpdate(true)
 	, UpdateInterval(0.1f)
 	, TimeSinceLastUpdate(0.0f)
+	, MarchingCubesGenerator(nullptr)
 {
 	PrimaryComponentTick.bCanEverTick = true;
+	
+	// Initialize marching cubes generator
+	MarchingCubesGenerator = new FMarchingCubesGenerator();
+	
+	// Set default marching cubes configuration
+	MarchingCubesConfig.VoxelSize = VoxelSize;
+	MarchingCubesConfig.GridResolution = FIntVector(50, 50, 50);
+}
+
+UProceduralGenerator::~UProceduralGenerator()
+{
+	if (MarchingCubesGenerator)
+	{
+		delete MarchingCubesGenerator;
+		MarchingCubesGenerator = nullptr;
+	}
 }
 
 void UProceduralGenerator::BeginPlay()
@@ -84,6 +101,9 @@ void UProceduralGenerator::GenerateFromBitmapPoints(const TArray<FBitmapPoint>& 
 			break;
 		case EProceduralGenerationType::Surface:
 			GenerateSurface(Points);
+			break;
+		case EProceduralGenerationType::MarchingCubes:
+			GenerateMarchingCubesInternal(Points);
 			break;
 	}
 }
@@ -334,4 +354,169 @@ void UProceduralGenerator::ForceMemoryCleanup()
 	CachedPoints.Shrink();
 	
 	UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Force cleanup freed %d KB of cached point data"), PreviousMemory);
+}
+
+void UProceduralGenerator::SetMarchingCubesConfig(const FMarchingCubesConfig& NewConfig)
+{
+	MarchingCubesConfig = NewConfig;
+	
+	// Update voxel size to match config
+	VoxelSize = MarchingCubesConfig.VoxelSize;
+	
+	UE_LOG(LogTemp, Log, TEXT("Marching Cubes config updated: VoxelSize=%.2f, GridRes=(%d,%d,%d), IsoValue=%.2f"), 
+		MarchingCubesConfig.VoxelSize, 
+		MarchingCubesConfig.GridResolution.X, 
+		MarchingCubesConfig.GridResolution.Y, 
+		MarchingCubesConfig.GridResolution.Z,
+		MarchingCubesConfig.IsoValue);
+}
+
+void UProceduralGenerator::GenerateMarchingCubes(const TArray<FBitmapPoint>& Points)
+{
+	if (!MarchingCubesGenerator)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Marching cubes generator not initialized"));
+		return;
+	}
+	
+	// Update grid bounds from points if needed
+	UpdateGridBoundsFromPoints(Points);
+	
+	// Generate using marching cubes
+	GenerateMarchingCubesInternal(Points);
+}
+
+void UProceduralGenerator::UpdateGridBoundsFromPoints(const TArray<FBitmapPoint>& Points, float Padding)
+{
+	if (Points.Num() == 0)
+	{
+		return;
+	}
+	
+	// Find bounding box of all points
+	FVector MinBounds = Points[0].Position;
+	FVector MaxBounds = Points[0].Position;
+	
+	for (const FBitmapPoint& Point : Points)
+	{
+		MinBounds = MinBounds.ComponentMin(Point.Position);
+		MaxBounds = MaxBounds.ComponentMax(Point.Position);
+	}
+	
+	// Add padding
+	MinBounds -= FVector(Padding);
+	MaxBounds += FVector(Padding);
+	
+	// Update marching cubes config
+	MarchingCubesConfig.GridMin = MinBounds;
+	MarchingCubesConfig.GridMax = MaxBounds;
+	
+	// Calculate optimal grid resolution based on voxel size
+	FVector GridSize = MaxBounds - MinBounds;
+	FIntVector OptimalResolution = FIntVector(
+		FMath::CeilToInt(GridSize.X / MarchingCubesConfig.VoxelSize),
+		FMath::CeilToInt(GridSize.Y / MarchingCubesConfig.VoxelSize),
+		FMath::CeilToInt(GridSize.Z / MarchingCubesConfig.VoxelSize)
+	);
+	
+	// Clamp resolution to reasonable limits
+	OptimalResolution.X = FMath::Clamp(OptimalResolution.X, 10, 200);
+	OptimalResolution.Y = FMath::Clamp(OptimalResolution.Y, 10, 200);
+	OptimalResolution.Z = FMath::Clamp(OptimalResolution.Z, 10, 200);
+	
+	MarchingCubesConfig.GridResolution = OptimalResolution;
+	
+	UE_LOG(LogTemp, Log, TEXT("Updated grid bounds: Min=(%s), Max=(%s), Resolution=(%d,%d,%d)"), 
+		*MinBounds.ToString(), *MaxBounds.ToString(),
+		OptimalResolution.X, OptimalResolution.Y, OptimalResolution.Z);
+}
+
+void UProceduralGenerator::GenerateMarchingCubesInternal(const TArray<FBitmapPoint>& Points)
+{
+	if (!MarchingCubesGenerator || Points.Num() == 0)
+	{
+		return;
+	}
+	
+	CreateProceduralMeshIfNeeded();
+	
+	// Clear existing mesh
+	ProceduralMesh->ClearAllMeshSections();
+	
+	// Generate triangles using marching cubes
+	TArray<FMCTriangle> MCTriangles = MarchingCubesGenerator->GenerateFromBitmapPoints(Points, MarchingCubesConfig);
+	
+	if (MCTriangles.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Marching cubes generated no triangles"));
+		return;
+	}
+	
+	// Convert marching cubes triangles to procedural mesh format
+	ConvertMCTrianglesToMesh(MCTriangles);
+	
+	UE_LOG(LogTemp, Log, TEXT("Marching cubes generated %d triangles from %d points"), MCTriangles.Num(), Points.Num());
+}
+
+void UProceduralGenerator::ConvertMCTrianglesToMesh(const TArray<FMCTriangle>& MCTriangles)
+{
+	if (!ProceduralMesh || MCTriangles.Num() == 0)
+	{
+		return;
+	}
+	
+	TArray<FVector> Vertices;
+	TArray<int32> Triangles;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UV0;
+	TArray<FColor> VertexColors;
+	TArray<FProcMeshTangent> Tangents;
+	
+	// Convert marching cubes triangles to mesh data
+	for (int32 i = 0; i < MCTriangles.Num(); i++)
+	{
+		const FMCTriangle& Triangle = MCTriangles[i];
+		
+		// Add vertices
+		int32 BaseIndex = Vertices.Num();
+		for (int32 j = 0; j < 3; j++)
+		{
+			Vertices.Add(Triangle.Vertices[j]);
+			Normals.Add(Triangle.Normals[j]);
+			UV0.Add(Triangle.UVs[j]);
+			VertexColors.Add(Triangle.Colors[j]);
+		}
+		
+		// Add triangle indices
+		Triangles.Add(BaseIndex);
+		Triangles.Add(BaseIndex + 1);
+		Triangles.Add(BaseIndex + 2);
+	}
+	
+	// Calculate tangents
+	for (int32 i = 0; i < Vertices.Num(); i++)
+	{
+		FVector Tangent = FVector::ForwardVector;
+		if (i < Normals.Num())
+		{
+			// Calculate tangent perpendicular to normal
+			FVector Normal = Normals[i];
+			if (!Normal.Equals(FVector::ForwardVector))
+			{
+				Tangent = FVector::CrossProduct(Normal, FVector::UpVector).GetSafeNormal();
+			}
+		}
+		Tangents.Add(FProcMeshTangent(Tangent, false));
+	}
+	
+	// Create mesh section
+	ProceduralMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
+	
+	// Apply material if set
+	if (DefaultMaterial)
+	{
+		ProceduralMesh->SetMaterial(0, DefaultMaterial);
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Created mesh with %d vertices and %d triangles"), Vertices.Num(), Triangles.Num() / 3);
 }
