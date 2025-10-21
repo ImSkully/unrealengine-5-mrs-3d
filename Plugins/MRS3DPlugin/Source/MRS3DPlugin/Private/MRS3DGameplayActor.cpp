@@ -288,3 +288,48 @@ void AMRS3DGameplayActor::VisualizePlanes()
 		DrawDebugSphere(GetWorld(), Plane.Center, 10.0f, 8, PlaneColor, false, PlaneVisualizationDuration, 0, 2.0f);
 	}
 }
+
+void AMRS3DGameplayActor::SetMarchingCubesConfig(const FMarchingCubesConfig& Config)
+{
+	if (ProceduralGenerator)
+	{
+		ProceduralGenerator->SetMarchingCubesConfig(Config);
+		UE_LOG(LogTemp, Log, TEXT("Marching cubes configuration updated"));
+	}
+}
+
+void AMRS3DGameplayActor::GenerateWithMarchingCubes()
+{
+	if (!ProceduralGenerator || !BitmapMapper)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Cannot generate with marching cubes: missing components"));
+		return;
+	}
+	
+	const TArray<FBitmapPoint>& Points = BitmapMapper->GetBitmapPoints();
+	if (Points.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No bitmap points available for marching cubes generation"));
+		return;
+	}
+	
+	ProceduralGenerator->GenerateMarchingCubes(Points);
+	UE_LOG(LogTemp, Log, TEXT("Generated mesh using marching cubes from %d points"), Points.Num());
+}
+
+void AMRS3DGameplayActor::EnableMarchingCubesGeneration(bool bEnable)
+{
+	if (ProceduralGenerator)
+	{
+		if (bEnable)
+		{
+			ProceduralGenerator->SetGenerationType(EProceduralGenerationType::MarchingCubes);
+			UE_LOG(LogTemp, Log, TEXT("Enabled marching cubes generation mode"));
+		}
+		else
+		{
+			ProceduralGenerator->SetGenerationType(EProceduralGenerationType::Mesh);
+			UE_LOG(LogTemp, Log, TEXT("Disabled marching cubes generation mode"));
+		}
+	}
+}
