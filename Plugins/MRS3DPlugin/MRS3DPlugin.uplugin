@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "1.0",
+	"Version": 2,
+	"VersionName": "2.0",
 	"FriendlyName": "MRS3D Plugin",
-	"Description": "Mixed Reality Spatial 3D Procedural Generation Plugin with AR/MR Bitmap Mapping",
+	"Description": "Mixed Reality Spatial 3D Procedural Generation Plugin with AR/MR Bitmap Mapping, Plane Detection, and Tracking State Management",
 	"Category": "Procedural",
 	"CreatedBy": "Skully",
 	"CreatedByURL": "",

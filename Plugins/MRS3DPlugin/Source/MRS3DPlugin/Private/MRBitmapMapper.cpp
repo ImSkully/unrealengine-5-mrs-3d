@@ -1,4 +1,5 @@
 #include "MRBitmapMapper.h"
+#include "PlaneDetectionSubsystem.h"
 #include "Engine/Engine.h"
 
 UMRBitmapMapper::UMRBitmapMapper()
@@ -8,8 +9,12 @@ UMRBitmapMapper::UMRBitmapMapper()
 	, bAutoCleanupEnabled(true)
 	, CleanupIntervalSeconds(30.0f)  // Cleanup every 30 seconds
 	, LastCleanupTime(0.0f)
-{}
-}
+	, bAutoPlaneDetectionEnabled(false)
+	, PlaneDetectionInterval(10.0f)  // Detect planes every 10 seconds
+	, MinPointsForPlaneDetection(100)
+	, LastPlaneDetectionTime(0.0f)
+	, CurrentTrackingState(ETrackingState::NotTracking)
+{
 
 void UMRBitmapMapper::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -18,6 +23,8 @@ void UMRBitmapMapper::Initialize(FSubsystemCollectionBase& Collection)
 	BitmapPoints.Empty();
 	BitmapPoints.Reserve(1000); // Reserve space for better performance
 	LastCleanupTime = FPlatformTime::Seconds();
+	LastPlaneDetectionTime = FPlatformTime::Seconds();
+	CurrentTrackingState = ETrackingState::NotTracking;
 }
 
 void UMRBitmapMapper::Deinitialize()
@@ -33,6 +40,12 @@ void UMRBitmapMapper::AddBitmapPoint(const FBitmapPoint& Point)
 	if (bAutoCleanupEnabled)
 	{
 		PerformAutoCleanup();
+	}
+
+	// Perform auto plane detection if enabled
+	if (bAutoPlaneDetectionEnabled)
+	{
+		PerformAutoPlaneDetection();
 	}
 
 	BitmapPoints.Add(Point);
@@ -227,5 +240,83 @@ void UMRBitmapMapper::RemovePointsByAge(float CurrentTime)
 	if (RemovedCount > 0)
 	{
 		UE_LOG(LogTemp, Verbose, TEXT("Auto-cleanup removed %d aged bitmap points"), RemovedCount);
+	}
+}
+
+void UMRBitmapMapper::SetAutoPlaneDetectionEnabled(bool bEnabled)
+{
+	bAutoPlaneDetectionEnabled = bEnabled;
+	UE_LOG(LogTemp, Log, TEXT("Auto plane detection %s"), bEnabled ? TEXT("enabled") : TEXT("disabled"));
+}
+
+TArray<FDetectedPlane> UMRBitmapMapper::DetectPlanesFromCurrentPoints(float PlaneThickness)
+{
+	if (UPlaneDetectionSubsystem* PlaneSubsystem = GetGameInstance()->GetSubsystem<UPlaneDetectionSubsystem>())
+	{
+		TArray<FDetectedPlane> DetectedPlanes = PlaneSubsystem->DetectPlanesFromPoints(BitmapPoints, PlaneThickness);
+		
+		// Add detected planes to the plane detection subsystem
+		for (const FDetectedPlane& Plane : DetectedPlanes)
+		{
+			PlaneSubsystem->AddDetectedPlane(Plane);
+		}
+		
+		UE_LOG(LogTemp, Log, TEXT("Detected %d planes from %d bitmap points"), DetectedPlanes.Num(), BitmapPoints.Num());
+		return DetectedPlanes;
+	}
+	
+	return TArray<FDetectedPlane>();
+}
+
+void UMRBitmapMapper::UpdateARTrackingState(ETrackingState NewState, float Quality, const FString& LossReason)
+{
+	ETrackingState PreviousState = CurrentTrackingState;
+	CurrentTrackingState = NewState;
+	
+	// Update plane detection subsystem with tracking state
+	if (UPlaneDetectionSubsystem* PlaneSubsystem = GetGameInstance()->GetSubsystem<UPlaneDetectionSubsystem>())
+	{
+		PlaneSubsystem->UpdateTrackingState(NewState, Quality, LossReason);
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("AR Tracking state updated from %d to %d (Quality: %.2f)"), 
+		(int32)PreviousState, (int32)NewState, Quality);
+	
+	// Handle tracking loss scenarios
+	if (NewState == ETrackingState::TrackingLost || NewState == ETrackingState::NotTracking)
+	{
+		// Stop automatic plane detection during tracking loss
+		if (bAutoPlaneDetectionEnabled)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Pausing auto plane detection due to tracking loss"));
+		}
+	}
+	else if (NewState == ETrackingState::FullTracking && PreviousState != ETrackingState::FullTracking)
+	{
+		// Resume plane detection when tracking is restored
+		if (bAutoPlaneDetectionEnabled)
+		{
+			LastPlaneDetectionTime = FPlatformTime::Seconds(); // Reset timer
+			UE_LOG(LogTemp, Log, TEXT("Resuming auto plane detection with full tracking"));
+		}
+	}
+}
+
+ETrackingState UMRBitmapMapper::GetCurrentTrackingState() const
+{
+	return CurrentTrackingState;
+}
+
+void UMRBitmapMapper::PerformAutoPlaneDetection()
+{
+	const float CurrentTime = FPlatformTime::Seconds();
+	
+	// Check if it's time for plane detection and we have enough points
+	if (CurrentTime - LastPlaneDetectionTime >= PlaneDetectionInterval &&
+		BitmapPoints.Num() >= MinPointsForPlaneDetection &&
+		CurrentTrackingState == ETrackingState::FullTracking)
+	{
+		DetectPlanesFromCurrentPoints();
+		LastPlaneDetectionTime = CurrentTime;
 	}
 }

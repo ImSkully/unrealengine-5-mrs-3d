@@ -4,6 +4,8 @@
 #include "GameFramework/Actor.h"
 #include "ProceduralGenerator.h"
 #include "MRBitmapMapper.h"
+#include "PlaneDetection.h"
+#include "PlaneDetectionSubsystem.h"
 #include "MRS3DGameplayActor.generated.h"
 
 /**
@@ -41,6 +43,42 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
 	void SetARDataReception(bool bEnabled);
 
+	/**
+	 * Update AR tracking state
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
+	void UpdateTrackingState(ETrackingState NewState, float Quality = 1.0f, const FString& LossReason = TEXT(""));
+
+	/**
+	 * Enable/disable plane detection
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
+	void SetPlaneDetectionEnabled(bool bEnabled);
+
+	/**
+	 * Get all detected planes
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
+	TArray<FDetectedPlane> GetDetectedPlanes() const;
+
+	/**
+	 * Get the largest detected floor plane
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
+	FDetectedPlane GetLargestFloorPlane() const;
+
+	/**
+	 * Manually trigger plane detection
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
+	void TriggerPlaneDetection();
+
+	/**
+	 * Simulate plane detection for testing
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
+	void SimulatePlaneDetection();
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Gameplay")
 	UProceduralGenerator* ProceduralGenerator;
 
@@ -50,6 +88,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Gameplay")
 	bool bEnableDebugVisualization;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|PlaneDetection")
+	bool bAutoPlaneDetectionEnabled;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|PlaneDetection")
+	bool bVisualizeDetectedPlanes;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|PlaneDetection")
+	float PlaneVisualizationDuration;
+
 protected:
 	UPROPERTY()
 	UMRBitmapMapper* BitmapMapper;
@@ -57,4 +104,20 @@ protected:
 	bool bARDataReceptionEnabled;
 
 	void OnBitmapPointsUpdated(const TArray<FBitmapPoint>& Points);
+	
+	// Plane detection event handlers
+	UFUNCTION()
+	void OnPlaneDetected(const FDetectedPlane& DetectedPlane);
+	
+	UFUNCTION()
+	void OnPlaneUpdated(const FDetectedPlane& UpdatedPlane);
+	
+	UFUNCTION()
+	void OnPlaneLost(const FString& PlaneID);
+	
+	UFUNCTION()
+	void OnTrackingStateChanged(ETrackingState NewState);
+	
+	// Helper methods
+	void VisualizePlanes();
 };
