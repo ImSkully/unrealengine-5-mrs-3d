@@ -3,7 +3,12 @@
 
 UMRBitmapMapper::UMRBitmapMapper()
 	: bRealTimeUpdatesEnabled(true)
-{
+	, MaxBitmapPoints(50000)  // Default limit of 50k points
+	, MaxPointAgeSeconds(300.0f)  // 5 minutes default
+	, bAutoCleanupEnabled(true)
+	, CleanupIntervalSeconds(30.0f)  // Cleanup every 30 seconds
+	, LastCleanupTime(0.0f)
+{}
 }
 
 void UMRBitmapMapper::Initialize(FSubsystemCollectionBase& Collection)
@@ -11,6 +16,8 @@ void UMRBitmapMapper::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper Subsystem Initialized"));
 	BitmapPoints.Empty();
+	BitmapPoints.Reserve(1000); // Reserve space for better performance
+	LastCleanupTime = FPlatformTime::Seconds();
 }
 
 void UMRBitmapMapper::Deinitialize()
@@ -22,7 +29,19 @@ void UMRBitmapMapper::Deinitialize()
 
 void UMRBitmapMapper::AddBitmapPoint(const FBitmapPoint& Point)
 {
+	// Perform auto cleanup if enabled
+	if (bAutoCleanupEnabled)
+	{
+		PerformAutoCleanup();
+	}
+
 	BitmapPoints.Add(Point);
+	
+	// Check if we exceed max points limit
+	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	{
+		RemoveExcessPoints();
+	}
 	
 	if (bRealTimeUpdatesEnabled)
 	{
@@ -32,7 +51,19 @@ void UMRBitmapMapper::AddBitmapPoint(const FBitmapPoint& Point)
 
 void UMRBitmapMapper::AddBitmapPoints(const TArray<FBitmapPoint>& Points)
 {
+	// Perform auto cleanup if enabled
+	if (bAutoCleanupEnabled)
+	{
+		PerformAutoCleanup();
+	}
+
 	BitmapPoints.Append(Points);
+	
+	// Check if we exceed max points limit
+	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	{
+		RemoveExcessPoints();
+	}
 	
 	if (bRealTimeUpdatesEnabled)
 	{
@@ -70,4 +101,131 @@ void UMRBitmapMapper::SetRealTimeUpdates(bool bEnabled)
 void UMRBitmapMapper::BroadcastUpdate()
 {
 	OnBitmapPointsUpdated.Broadcast(BitmapPoints);
+}
+
+void UMRBitmapMapper::SetMaxBitmapPoints(int32 MaxPoints)
+{
+	MaxBitmapPoints = FMath::Max(0, MaxPoints);
+	
+	// Immediately remove excess points if needed
+	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	{
+		RemoveExcessPoints();
+	}
+}
+
+void UMRBitmapMapper::SetMaxPointAge(float MaxAgeSeconds)
+{
+	MaxPointAgeSeconds = FMath::Max(0.0f, MaxAgeSeconds);
+}
+
+int32 UMRBitmapMapper::RemoveOldPoints()
+{
+	const float CurrentTime = FPlatformTime::Seconds();
+	const int32 InitialCount = BitmapPoints.Num();
+	
+	RemovePointsByAge(CurrentTime);
+	
+	const int32 RemovedCount = InitialCount - BitmapPoints.Num();
+	if (RemovedCount > 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Removed %d old bitmap points"), RemovedCount);
+		BroadcastUpdate();
+	}
+	
+	return RemovedCount;
+}
+
+int32 UMRBitmapMapper::GetMemoryUsageKB() const
+{
+	// Calculate approximate memory usage
+	const int32 PointSize = sizeof(FBitmapPoint);
+	const int32 ArrayOverhead = sizeof(TArray<FBitmapPoint>);
+	const int32 TotalBytes = (BitmapPoints.Num() * PointSize) + ArrayOverhead;
+	return TotalBytes / 1024;
+}
+
+void UMRBitmapMapper::ForceCleanup()
+{
+	const float CurrentTime = FPlatformTime::Seconds();
+	const int32 InitialCount = BitmapPoints.Num();
+	
+	// Remove old points
+	RemovePointsByAge(CurrentTime);
+	
+	// Remove excess points
+	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	{
+		RemoveExcessPoints();
+	}
+	
+	// Shrink array to fit
+	BitmapPoints.Shrink();
+	
+	const int32 RemovedCount = InitialCount - BitmapPoints.Num();
+	UE_LOG(LogTemp, Log, TEXT("Force cleanup removed %d points, memory usage: %d KB"), 
+		RemovedCount, GetMemoryUsageKB());
+	
+	LastCleanupTime = CurrentTime;
+	
+	if (RemovedCount > 0)
+	{
+		BroadcastUpdate();
+	}
+}
+
+void UMRBitmapMapper::PerformAutoCleanup()
+{
+	const float CurrentTime = FPlatformTime::Seconds();
+	
+	// Check if it's time for cleanup
+	if (CurrentTime - LastCleanupTime >= CleanupIntervalSeconds)
+	{
+		RemovePointsByAge(CurrentTime);
+		LastCleanupTime = CurrentTime;
+	}
+}
+
+void UMRBitmapMapper::RemoveExcessPoints()
+{
+	if (MaxBitmapPoints <= 0 || BitmapPoints.Num() <= MaxBitmapPoints)
+	{
+		return;
+	}
+	
+	// Remove oldest points first (FIFO)
+	const int32 PointsToRemove = BitmapPoints.Num() - MaxBitmapPoints;
+	
+	// Sort by timestamp to remove oldest first
+	BitmapPoints.Sort([](const FBitmapPoint& A, const FBitmapPoint& B) {
+		return A.Timestamp < B.Timestamp;
+	});
+	
+	// Remove the oldest points
+	BitmapPoints.RemoveAt(0, PointsToRemove);
+	
+	UE_LOG(LogTemp, Warning, TEXT("Removed %d excess bitmap points to stay within limit of %d"), 
+		PointsToRemove, MaxBitmapPoints);
+}
+
+void UMRBitmapMapper::RemovePointsByAge(float CurrentTime)
+{
+	if (MaxPointAgeSeconds <= 0.0f)
+	{
+		return;
+	}
+	
+	const float OldestAllowedTime = CurrentTime - MaxPointAgeSeconds;
+	const int32 InitialCount = BitmapPoints.Num();
+	
+	// Remove points that are too old
+	BitmapPoints.RemoveAll([OldestAllowedTime](const FBitmapPoint& Point) {
+		return Point.Timestamp < OldestAllowedTime;
+	});
+	
+	const int32 RemovedCount = InitialCount - BitmapPoints.Num();
+	if (RemovedCount > 0)
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("Auto-cleanup removed %d aged bitmap points"), RemovedCount);
+	}
 }

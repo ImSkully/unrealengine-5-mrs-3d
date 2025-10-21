@@ -58,7 +58,18 @@ void UProceduralGenerator::TickComponent(float DeltaTime, ELevelTick TickType, F
 
 void UProceduralGenerator::GenerateFromBitmapPoints(const TArray<FBitmapPoint>& Points)
 {
-	CachedPoints = Points;
+	// Memory-aware caching - only cache if reasonable size
+	if (Points.Num() <= 100000)
+	{
+		CachedPoints = Points;
+	}
+	else
+	{
+		// For large datasets, clear cache to save memory
+		CachedPoints.Empty();
+		CachedPoints.Shrink();
+		UE_LOG(LogTemp, Warning, TEXT("ProceduralGenerator: Large point cloud not cached to preserve memory"));
+	}
 	
 	switch (GenerationType)
 	{
@@ -79,6 +90,12 @@ void UProceduralGenerator::GenerateFromBitmapPoints(const TArray<FBitmapPoint>& 
 
 void UProceduralGenerator::UpdateGeometry(const TArray<FBitmapPoint>& Points)
 {
+	// Memory-aware update - limit cached points for performance
+	if (Points.Num() > 100000) // Prevent excessive memory usage
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ProceduralGenerator: Point cloud too large (%d points), performance may suffer"), Points.Num());
+	}
+	
 	GenerateFromBitmapPoints(Points);
 }
 
@@ -88,7 +105,10 @@ void UProceduralGenerator::ClearGeometry()
 	{
 		ProceduralMesh->ClearAllMeshSections();
 	}
+	
+	// Clear cached points and shrink array to free memory
 	CachedPoints.Empty();
+	CachedPoints.Shrink();
 }
 
 void UProceduralGenerator::SetGenerationType(EProceduralGenerationType NewType)
@@ -290,4 +310,28 @@ void UProceduralGenerator::GenerateSurface(const TArray<FBitmapPoint>& Points)
 {
 	// Surface generation - creates a continuous surface from points
 	GenerateMesh(Points);
+}
+
+int32 UProceduralGenerator::GetCachedPointsMemoryKB() const
+{
+	const int32 PointSize = sizeof(FBitmapPoint);
+	const int32 ArrayOverhead = sizeof(TArray<FBitmapPoint>);
+	const int32 TotalBytes = (CachedPoints.Num() * PointSize) + ArrayOverhead;
+	return TotalBytes / 1024;
+}
+
+void UProceduralGenerator::ForceMemoryCleanup()
+{
+	// Clear all mesh sections
+	if (ProceduralMesh)
+	{
+		ProceduralMesh->ClearAllMeshSections();
+	}
+	
+	// Clear and shrink cached points array
+	const int32 PreviousMemory = GetCachedPointsMemoryKB();
+	CachedPoints.Empty();
+	CachedPoints.Shrink();
+	
+	UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Force cleanup freed %d KB of cached point data"), PreviousMemory);
 }

@@ -56,6 +56,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|Procedural")
 	void SetGenerationType(EProceduralGenerationType NewType);
 
+	/**
+	 * Get current memory usage of cached points in KB
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Procedural")
+	int32 GetCachedPointsMemoryKB() const;
+
+	/**
+	 * Force cleanup of cached geometry and points
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Procedural")
+	void ForceMemoryCleanup();
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Procedural")
 	EProceduralGenerationType GenerationType;
 

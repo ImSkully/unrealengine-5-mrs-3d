@@ -58,6 +58,36 @@ public:
 	void SetRealTimeUpdates(bool bEnabled);
 
 	/**
+	 * Set maximum number of bitmap points to store (0 = unlimited)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	void SetMaxBitmapPoints(int32 MaxPoints);
+
+	/**
+	 * Set maximum age in seconds for bitmap points (0 = no age limit)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	void SetMaxPointAge(float MaxAgeSeconds);
+
+	/**
+	 * Remove old bitmap points based on age
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	int32 RemoveOldPoints();
+
+	/**
+	 * Get current memory usage statistics
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	int32 GetMemoryUsageKB() const;
+
+	/**
+	 * Force garbage collection of old points
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|MR")
+	void ForceCleanup();
+
+	/**
 	 * Event fired when bitmap points are updated
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "MRS3D|MR")
@@ -70,5 +100,24 @@ protected:
 	UPROPERTY()
 	bool bRealTimeUpdatesEnabled;
 
+	// Memory management settings
+	UPROPERTY(Config)
+	int32 MaxBitmapPoints;
+
+	UPROPERTY(Config)
+	float MaxPointAgeSeconds;
+
+	UPROPERTY(Config)
+	bool bAutoCleanupEnabled;
+
+	UPROPERTY(Config)
+	float CleanupIntervalSeconds;
+
+	// Internal cleanup tracking
+	float LastCleanupTime;
+
 	void BroadcastUpdate();
+	void PerformAutoCleanup();
+	void RemoveExcessPoints();
+	void RemovePointsByAge(float CurrentTime);
 };

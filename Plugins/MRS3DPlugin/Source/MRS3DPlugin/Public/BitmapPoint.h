@@ -31,7 +31,7 @@ struct FMRS3DPLUGIN_API FBitmapPoint
 		: Position(FVector::ZeroVector)
 		, Color(FColor::White)
 		, Intensity(1.0f)
-		, Timestamp(0.0f)
+		, Timestamp(FPlatformTime::Seconds())
 		, Normal(FVector::UpVector)
 	{}
 
@@ -39,7 +39,7 @@ struct FMRS3DPLUGIN_API FBitmapPoint
 		: Position(InPosition)
 		, Color(InColor)
 		, Intensity(InIntensity)
-		, Timestamp(0.0f)
+		, Timestamp(FPlatformTime::Seconds())
 		, Normal(FVector::UpVector)
 	{}
 };
