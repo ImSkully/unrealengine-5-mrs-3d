@@ -3,320 +3,331 @@
 #include "Engine/Engine.h"
 
 UMRBitmapMapper::UMRBitmapMapper()
-	: bRealTimeUpdatesEnabled(true)
-	, MaxBitmapPoints(50000)  // Default limit of 50k points
-	, MaxPointAgeSeconds(300.0f)  // 5 minutes default
-	, bAutoCleanupEnabled(true)
-	, CleanupIntervalSeconds(30.0f)  // Cleanup every 30 seconds
-	, LastCleanupTime(0.0f)
+	: Storage(nullptr)
+	, MemoryManager(nullptr)
+	, SpatialIndex(nullptr)
+	, TrackingStateManager(nullptr)
+	, bRealTimeUpdatesEnabled(true)
 	, bAutoPlaneDetectionEnabled(false)
-	, PlaneDetectionInterval(10.0f)  // Detect planes every 10 seconds
+	, PlaneDetectionInterval(10.0f)
 	, MinPointsForPlaneDetection(100)
 	, LastPlaneDetectionTime(0.0f)
-	, CurrentTrackingState(ETrackingState::NotTracking)
 {
+}
 
 void UMRBitmapMapper::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper Subsystem Initialized"));
-	BitmapPoints.Empty();
-	BitmapPoints.Reserve(1000); // Reserve space for better performance
-	LastCleanupTime = FPlatformTime::Seconds();
-	LastPlaneDetectionTime = FPlatformTime::Seconds();
-	CurrentTrackingState = ETrackingState::NotTracking;
+	
+	InitializeComponents();
+	
+	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper: Initialized with specialized components"));
 }
 
 void UMRBitmapMapper::Deinitialize()
 {
-	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper Subsystem Deinitialized"));
-	BitmapPoints.Empty();
+	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper: Deinitialized"));
+	
+	// Cleanup will be handled by component destructors
+	Storage = nullptr;
+	MemoryManager = nullptr;
+	SpatialIndex = nullptr;
+	TrackingStateManager = nullptr;
+	
 	Super::Deinitialize();
 }
 
 void UMRBitmapMapper::AddBitmapPoint(const FBitmapPoint& Point)
 {
-	// Perform auto cleanup if enabled
-	if (bAutoCleanupEnabled)
+	if (!Storage || !bRealTimeUpdatesEnabled)
 	{
-		PerformAutoCleanup();
+		return;
 	}
 
+	// Add to storage (which will trigger events)
+	Storage->AddPoint(Point);
+	
+	// Add to spatial index for fast queries
+	if (SpatialIndex)
+	{
+		SpatialIndex->AddPoint(Point);
+	}
+	
 	// Perform auto plane detection if enabled
 	if (bAutoPlaneDetectionEnabled)
 	{
 		PerformAutoPlaneDetection();
 	}
-
-	BitmapPoints.Add(Point);
-	
-	// Check if we exceed max points limit
-	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
-	{
-		RemoveExcessPoints();
-	}
-	
-	if (bRealTimeUpdatesEnabled)
-	{
-		BroadcastUpdate();
-	}
 }
 
 void UMRBitmapMapper::AddBitmapPoints(const TArray<FBitmapPoint>& Points)
 {
-	// Perform auto cleanup if enabled
-	if (bAutoCleanupEnabled)
+	if (!Storage || !bRealTimeUpdatesEnabled || Points.Num() == 0)
 	{
-		PerformAutoCleanup();
+		return;
 	}
 
-	BitmapPoints.Append(Points);
+	// Add to storage (which will trigger events)
+	Storage->AddPoints(Points);
 	
-	// Check if we exceed max points limit
-	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	// Add to spatial index for fast queries
+	if (SpatialIndex)
 	{
-		RemoveExcessPoints();
+		SpatialIndex->AddPoints(Points);
 	}
 	
-	if (bRealTimeUpdatesEnabled)
+	// Perform auto plane detection if enabled
+	if (bAutoPlaneDetectionEnabled)
 	{
-		BroadcastUpdate();
+		PerformAutoPlaneDetection();
 	}
 }
 
 void UMRBitmapMapper::ClearBitmapPoints()
 {
-	BitmapPoints.Empty();
-	BroadcastUpdate();
+	if (Storage)
+	{
+		Storage->Clear();
+	}
+	
+	if (SpatialIndex)
+	{
+		SpatialIndex->Clear();
+	}
+}
+
+const TArray<FBitmapPoint>& UMRBitmapMapper::GetBitmapPoints() const
+{
+	static TArray<FBitmapPoint> EmptyArray;
+	return Storage ? Storage->GetAllPoints() : EmptyArray;
 }
 
 TArray<FBitmapPoint> UMRBitmapMapper::GetBitmapPointsInRadius(const FVector& Center, float Radius) const
 {
-	TArray<FBitmapPoint> PointsInRadius;
-	const float RadiusSquared = Radius * Radius;
-
-	for (const FBitmapPoint& Point : BitmapPoints)
+	if (!SpatialIndex)
 	{
-		if (FVector::DistSquared(Point.Position, Center) <= RadiusSquared)
-		{
-			PointsInRadius.Add(Point);
-		}
+		return TArray<FBitmapPoint>();
 	}
+	
+	return SpatialIndex->FindPointsInRadius(Center, Radius);
+}
 
-	return PointsInRadius;
+bool UMRBitmapMapper::FindNearestPoint(const FVector& Location, FBitmapPoint& OutPoint, float MaxDistance) const
+{
+	if (!SpatialIndex)
+	{
+		return false;
+	}
+	
+	return SpatialIndex->FindNearestPoint(Location, OutPoint, MaxDistance);
+}
+
+TArray<FBitmapPoint> UMRBitmapMapper::FindKNearestPoints(const FVector& Location, int32 K, float MaxDistance) const
+{
+	if (!SpatialIndex)
+	{
+		return TArray<FBitmapPoint>();
+	}
+	
+	return SpatialIndex->FindKNearestPoints(Location, K, MaxDistance);
 }
 
 void UMRBitmapMapper::SetRealTimeUpdates(bool bEnabled)
 {
 	bRealTimeUpdatesEnabled = bEnabled;
-}
-
-void UMRBitmapMapper::BroadcastUpdate()
-{
-	OnBitmapPointsUpdated.Broadcast(BitmapPoints);
+	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper: Real-time updates %s"), bEnabled ? TEXT("enabled") : TEXT("disabled"));
 }
 
 void UMRBitmapMapper::SetMaxBitmapPoints(int32 MaxPoints)
 {
-	MaxBitmapPoints = FMath::Max(0, MaxPoints);
-	
-	// Immediately remove excess points if needed
-	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	if (MemoryManager)
 	{
-		RemoveExcessPoints();
+		MemoryManager->SetMaxPoints(MaxPoints);
 	}
 }
 
 void UMRBitmapMapper::SetMaxPointAge(float MaxAgeSeconds)
 {
-	MaxPointAgeSeconds = FMath::Max(0.0f, MaxAgeSeconds);
+	if (MemoryManager)
+	{
+		MemoryManager->SetMaxPointAge(MaxAgeSeconds);
+	}
 }
 
 int32 UMRBitmapMapper::RemoveOldPoints()
 {
-	const float CurrentTime = FPlatformTime::Seconds();
-	const int32 InitialCount = BitmapPoints.Num();
-	
-	RemovePointsByAge(CurrentTime);
-	
-	const int32 RemovedCount = InitialCount - BitmapPoints.Num();
-	if (RemovedCount > 0)
+	if (!MemoryManager)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Removed %d old bitmap points"), RemovedCount);
-		BroadcastUpdate();
+		return 0;
 	}
 	
-	return RemovedCount;
+	return MemoryManager->RemoveOldPoints();
 }
 
 int32 UMRBitmapMapper::GetMemoryUsageKB() const
 {
-	// Calculate approximate memory usage
-	const int32 PointSize = sizeof(FBitmapPoint);
-	const int32 ArrayOverhead = sizeof(TArray<FBitmapPoint>);
-	const int32 TotalBytes = (BitmapPoints.Num() * PointSize) + ArrayOverhead;
-	return TotalBytes / 1024;
+	int32 TotalMemory = 0;
+	
+	if (Storage)
+	{
+		TotalMemory += Storage->GetMemoryUsageBytes() / 1024;
+	}
+	
+	if (SpatialIndex)
+	{
+		TotalMemory += SpatialIndex->GetMemoryUsageBytes() / 1024;
+	}
+	
+	return TotalMemory;
 }
 
 void UMRBitmapMapper::ForceCleanup()
 {
-	const float CurrentTime = FPlatformTime::Seconds();
-	const int32 InitialCount = BitmapPoints.Num();
-	
-	// Remove old points
-	RemovePointsByAge(CurrentTime);
-	
-	// Remove excess points
-	if (MaxBitmapPoints > 0 && BitmapPoints.Num() > MaxBitmapPoints)
+	if (MemoryManager)
 	{
-		RemoveExcessPoints();
-	}
-	
-	// Shrink array to fit
-	BitmapPoints.Shrink();
-	
-	const int32 RemovedCount = InitialCount - BitmapPoints.Num();
-	UE_LOG(LogTemp, Log, TEXT("Force cleanup removed %d points, memory usage: %d KB"), 
-		RemovedCount, GetMemoryUsageKB());
-	
-	LastCleanupTime = CurrentTime;
-	
-	if (RemovedCount > 0)
-	{
-		BroadcastUpdate();
-	}
-}
-
-void UMRBitmapMapper::PerformAutoCleanup()
-{
-	const float CurrentTime = FPlatformTime::Seconds();
-	
-	// Check if it's time for cleanup
-	if (CurrentTime - LastCleanupTime >= CleanupIntervalSeconds)
-	{
-		RemovePointsByAge(CurrentTime);
-		LastCleanupTime = CurrentTime;
-	}
-}
-
-void UMRBitmapMapper::RemoveExcessPoints()
-{
-	if (MaxBitmapPoints <= 0 || BitmapPoints.Num() <= MaxBitmapPoints)
-	{
-		return;
-	}
-	
-	// Remove oldest points first (FIFO)
-	const int32 PointsToRemove = BitmapPoints.Num() - MaxBitmapPoints;
-	
-	// Sort by timestamp to remove oldest first
-	BitmapPoints.Sort([](const FBitmapPoint& A, const FBitmapPoint& B) {
-		return A.Timestamp < B.Timestamp;
-	});
-	
-	// Remove the oldest points
-	BitmapPoints.RemoveAt(0, PointsToRemove);
-	
-	UE_LOG(LogTemp, Warning, TEXT("Removed %d excess bitmap points to stay within limit of %d"), 
-		PointsToRemove, MaxBitmapPoints);
-}
-
-void UMRBitmapMapper::RemovePointsByAge(float CurrentTime)
-{
-	if (MaxPointAgeSeconds <= 0.0f)
-	{
-		return;
-	}
-	
-	const float OldestAllowedTime = CurrentTime - MaxPointAgeSeconds;
-	const int32 InitialCount = BitmapPoints.Num();
-	
-	// Remove points that are too old
-	BitmapPoints.RemoveAll([OldestAllowedTime](const FBitmapPoint& Point) {
-		return Point.Timestamp < OldestAllowedTime;
-	});
-	
-	const int32 RemovedCount = InitialCount - BitmapPoints.Num();
-	if (RemovedCount > 0)
-	{
-		UE_LOG(LogTemp, Verbose, TEXT("Auto-cleanup removed %d aged bitmap points"), RemovedCount);
+		MemoryManager->PerformCleanup();
 	}
 }
 
 void UMRBitmapMapper::SetAutoPlaneDetectionEnabled(bool bEnabled)
 {
 	bAutoPlaneDetectionEnabled = bEnabled;
-	UE_LOG(LogTemp, Log, TEXT("Auto plane detection %s"), bEnabled ? TEXT("enabled") : TEXT("disabled"));
+	UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper: Auto plane detection %s"), bEnabled ? TEXT("enabled") : TEXT("disabled"));
 }
 
 TArray<FDetectedPlane> UMRBitmapMapper::DetectPlanesFromCurrentPoints(float PlaneThickness)
 {
-	if (UPlaneDetectionSubsystem* PlaneSubsystem = GetGameInstance()->GetSubsystem<UPlaneDetectionSubsystem>())
+	UPlaneDetectionSubsystem* PlaneDetection = GetGameInstance()->GetSubsystem<UPlaneDetectionSubsystem>();
+	if (!PlaneDetection || !Storage)
 	{
-		TArray<FDetectedPlane> DetectedPlanes = PlaneSubsystem->DetectPlanesFromPoints(BitmapPoints, PlaneThickness);
-		
-		// Add detected planes to the plane detection subsystem
-		for (const FDetectedPlane& Plane : DetectedPlanes)
-		{
-			PlaneSubsystem->AddDetectedPlane(Plane);
-		}
-		
-		UE_LOG(LogTemp, Log, TEXT("Detected %d planes from %d bitmap points"), DetectedPlanes.Num(), BitmapPoints.Num());
-		return DetectedPlanes;
+		return TArray<FDetectedPlane>();
 	}
 	
-	return TArray<FDetectedPlane>();
+	const TArray<FBitmapPoint>& CurrentPoints = Storage->GetAllPoints();
+	return PlaneDetection->DetectPlanes(CurrentPoints, PlaneThickness);
 }
 
-void UMRBitmapMapper::UpdateARTrackingState(ETrackingState NewState, float Quality, const FString& LossReason)
+void UMRBitmapMapper::UpdateARTrackingState(ETrackingState NewState, const FTransform& CameraPose, float Quality)
 {
-	ETrackingState PreviousState = CurrentTrackingState;
-	CurrentTrackingState = NewState;
-	
-	// Update plane detection subsystem with tracking state
-	if (UPlaneDetectionSubsystem* PlaneSubsystem = GetGameInstance()->GetSubsystem<UPlaneDetectionSubsystem>())
+	if (TrackingStateManager)
 	{
-		PlaneSubsystem->UpdateTrackingState(NewState, Quality, LossReason);
-	}
-	
-	UE_LOG(LogTemp, Log, TEXT("AR Tracking state updated from %d to %d (Quality: %.2f)"), 
-		(int32)PreviousState, (int32)NewState, Quality);
-	
-	// Handle tracking loss scenarios
-	if (NewState == ETrackingState::TrackingLost || NewState == ETrackingState::NotTracking)
-	{
-		// Stop automatic plane detection during tracking loss
-		if (bAutoPlaneDetectionEnabled)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Pausing auto plane detection due to tracking loss"));
-		}
-	}
-	else if (NewState == ETrackingState::FullTracking && PreviousState != ETrackingState::FullTracking)
-	{
-		// Resume plane detection when tracking is restored
-		if (bAutoPlaneDetectionEnabled)
-		{
-			LastPlaneDetectionTime = FPlatformTime::Seconds(); // Reset timer
-			UE_LOG(LogTemp, Log, TEXT("Resuming auto plane detection with full tracking"));
-		}
+		TrackingStateManager->UpdateTrackingState(NewState, CameraPose, Quality);
 	}
 }
 
 ETrackingState UMRBitmapMapper::GetCurrentTrackingState() const
 {
-	return CurrentTrackingState;
+	if (!TrackingStateManager)
+	{
+		return ETrackingState::NotTracking;
+	}
+	
+	return TrackingStateManager->GetTrackingState();
+}
+
+FMRSessionInfo UMRBitmapMapper::GetTrackingSessionInfo() const
+{
+	if (!TrackingStateManager)
+	{
+		return FMRSessionInfo();
+	}
+	
+	return TrackingStateManager->GetSessionInfo();
+}
+
+bool UMRBitmapMapper::IsTrackingStable() const
+{
+	if (!TrackingStateManager)
+	{
+		return false;
+	}
+	
+	return TrackingStateManager->IsTrackingStable();
+}
+
+void UMRBitmapMapper::InitializeComponents()
+{
+	// Create specialized components
+	Storage = NewObject<UBitmapPointStorage>(this);
+	MemoryManager = NewObject<UBitmapPointMemoryManager>(this);
+	SpatialIndex = NewObject<UBitmapPointSpatialIndex>(this);
+	
+	// Get or create tracking state manager (it's a subsystem)
+	TrackingStateManager = GetGameInstance()->GetSubsystem<UMRTrackingStateManager>();
+	
+	// Initialize components
+	if (Storage)
+	{
+		Storage->OnBitmapPointsChanged.AddDynamic(this, &UMRBitmapMapper::OnStoragePointsChanged);
+	}
+	
+	if (MemoryManager && Storage)
+	{
+		MemoryManager->Initialize(Storage);
+		MemoryManager->OnMemoryCleanup.AddDynamic(this, &UMRBitmapMapper::OnMemoryCleanup);
+	}
+	
+	if (SpatialIndex)
+	{
+		SpatialIndex->Initialize();
+		SpatialIndex->OnSpatialIndexUpdated.AddDynamic(this, &UMRBitmapMapper::OnSpatialIndexUpdated);
+	}
+	
+	// Initialize tracking
+	LastPlaneDetectionTime = FPlatformTime::Seconds();
+}
+
+void UMRBitmapMapper::OnStoragePointsChanged(const TArray<FBitmapPoint>& Points)
+{
+	BroadcastUpdate();
+}
+
+void UMRBitmapMapper::OnMemoryCleanup(int32 PointsRemoved, int32 MemoryFreedKB)
+{
+	UE_LOG(LogTemp, Verbose, TEXT("MRBitmapMapper: Memory cleanup removed %d points, freed %d KB"), 
+		PointsRemoved, MemoryFreedKB);
+	
+	// Sync spatial index with storage after cleanup
+	if (SpatialIndex && Storage && PointsRemoved > 0)
+	{
+		SpatialIndex->Clear();
+		SpatialIndex->AddPoints(Storage->GetAllPoints());
+	}
+}
+
+void UMRBitmapMapper::OnSpatialIndexUpdated(int32 AddedPoints, int32 RemovedPoints)
+{
+	// Spatial index updated - could trigger additional processing here if needed
+}
+
+void UMRBitmapMapper::BroadcastUpdate()
+{
+	if (bRealTimeUpdatesEnabled && Storage)
+	{
+		OnBitmapPointsUpdated.Broadcast(Storage->GetAllPoints());
+	}
 }
 
 void UMRBitmapMapper::PerformAutoPlaneDetection()
 {
 	const float CurrentTime = FPlatformTime::Seconds();
-	
-	// Check if it's time for plane detection and we have enough points
-	if (CurrentTime - LastPlaneDetectionTime >= PlaneDetectionInterval &&
-		BitmapPoints.Num() >= MinPointsForPlaneDetection &&
-		CurrentTrackingState == ETrackingState::FullTracking)
+	if (CurrentTime - LastPlaneDetectionTime < PlaneDetectionInterval)
 	{
-		DetectPlanesFromCurrentPoints();
-		LastPlaneDetectionTime = CurrentTime;
+		return;
 	}
+	
+	if (!Storage || Storage->GetPointCount() < MinPointsForPlaneDetection)
+	{
+		return;
+	}
+	
+	// Trigger plane detection
+	TArray<FDetectedPlane> DetectedPlanes = DetectPlanesFromCurrentPoints();
+	
+	if (DetectedPlanes.Num() > 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("MRBitmapMapper: Auto-detected %d planes"), DetectedPlanes.Num());
+	}
+	
+	LastPlaneDetectionTime = CurrentTime;
 }
