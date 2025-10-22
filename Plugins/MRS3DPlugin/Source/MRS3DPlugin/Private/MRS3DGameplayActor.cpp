@@ -6,7 +6,11 @@
 AMRS3DGameplayActor::AMRS3DGameplayActor()
 	: bAutoGenerateOnReceive(true)
 	, bEnableDebugVisualization(false)
+	, bEnableAsyncGeneration(true)
+	, AsyncGenerationThreshold(10000)
 	, bARDataReceptionEnabled(true)
+	, CurrentAsyncJobID(-1)
+	, bAsyncGenerationInProgress(false)
 	, bAutoPlaneDetectionEnabled(false)
 	, bVisualizeDetectedPlanes(true)
 	, PlaneVisualizationDuration(5.0f)
@@ -40,6 +44,16 @@ void AMRS3DGameplayActor::BeginPlay()
 			PlaneSubsystem->OnPlaneLost.AddDynamic(this, &AMRS3DGameplayActor::OnPlaneLost);
 			PlaneSubsystem->OnTrackingStateChanged.AddDynamic(this, &AMRS3DGameplayActor::OnTrackingStateChanged);
 		}
+	}
+	
+	// Bind async generation events if procedural generator is available
+	if (ProceduralGenerator)
+	{
+		ProceduralGenerator->OnAsyncGenerationComplete.AddDynamic(this, &AMRS3DGameplayActor::OnAsyncGenerationComplete);
+		ProceduralGenerator->OnAsyncGenerationProgress.AddDynamic(this, &AMRS3DGameplayActor::OnAsyncGenerationProgress);
+		
+		// Configure async generation settings
+		ProceduralGenerator->SetAsyncThreshold(AsyncGenerationThreshold);
 	}
 }
 
@@ -330,6 +344,126 @@ void AMRS3DGameplayActor::EnableMarchingCubesGeneration(bool bEnable)
 		{
 			ProceduralGenerator->SetGenerationType(EProceduralGenerationType::Mesh);
 			UE_LOG(LogTemp, Log, TEXT("Disabled marching cubes generation mode"));
+		}
+	}
+}
+
+// Async Generation Methods
+
+int32 AMRS3DGameplayActor::GenerateAsyncMesh(bool bForceAsync)
+{
+	if (!ProceduralGenerator || !BitmapMapper)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MRS3DGameplayActor: Cannot start async generation - missing components"));
+		return -1;
+	}
+
+	if (bAsyncGenerationInProgress)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MRS3DGameplayActor: Async generation already in progress"));
+		return CurrentAsyncJobID;
+	}
+
+	const TArray<FBitmapPoint>& Points = BitmapMapper->GetBitmapPoints();
+	if (Points.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MRS3DGameplayActor: No bitmap points available for async generation"));
+		return -1;
+	}
+
+	// Check if we should use async generation based on size
+	if (!bForceAsync && !bEnableAsyncGeneration)
+	{
+		UE_LOG(LogTemp, Log, TEXT("MRS3DGameplayActor: Async generation disabled, using sync generation"));
+		ProceduralGenerator->GenerateFromBitmapPoints(Points);
+		return -1;
+	}
+
+	CurrentAsyncJobID = ProceduralGenerator->GenerateAsyncFromBitmapPoints(Points, bForceAsync);
+	
+	if (CurrentAsyncJobID != -1)
+	{
+		bAsyncGenerationInProgress = true;
+		UE_LOG(LogTemp, Log, TEXT("MRS3DGameplayActor: Started async mesh generation (Job %d) for %d points"), 
+			CurrentAsyncJobID, Points.Num());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MRS3DGameplayActor: Failed to start async generation, falling back to sync"));
+		ProceduralGenerator->GenerateFromBitmapPoints(Points);
+	}
+
+	return CurrentAsyncJobID;
+}
+
+bool AMRS3DGameplayActor::CancelAsyncGeneration()
+{
+	if (!ProceduralGenerator || CurrentAsyncJobID == -1)
+	{
+		return false;
+	}
+
+	bool bCancelled = ProceduralGenerator->CancelAsyncGeneration(CurrentAsyncJobID);
+	
+	if (bCancelled)
+	{
+		bAsyncGenerationInProgress = false;
+		CurrentAsyncJobID = -1;
+		UE_LOG(LogTemp, Log, TEXT("MRS3DGameplayActor: Cancelled async generation"));
+	}
+
+	return bCancelled;
+}
+
+float AMRS3DGameplayActor::GetAsyncGenerationProgress() const
+{
+	if (!ProceduralGenerator || CurrentAsyncJobID == -1)
+	{
+		return 0.0f;
+	}
+
+	return ProceduralGenerator->GetAsyncGenerationProgress(CurrentAsyncJobID);
+}
+
+bool AMRS3DGameplayActor::IsAsyncGenerationActive() const
+{
+	return bAsyncGenerationInProgress && CurrentAsyncJobID != -1;
+}
+
+void AMRS3DGameplayActor::OnAsyncGenerationComplete(bool bSuccess, int32 JobID)
+{
+	if (JobID == CurrentAsyncJobID)
+	{
+		bAsyncGenerationInProgress = false;
+		CurrentAsyncJobID = -1;
+		
+		UE_LOG(LogTemp, Log, TEXT("MRS3DGameplayActor: Async generation %s for job %d"), 
+			bSuccess ? TEXT("completed successfully") : TEXT("failed"), JobID);
+		
+		// Broadcast Blueprint event or handle completion logic here
+		if (bSuccess)
+		{
+			UE_LOG(LogTemp, Log, TEXT("MRS3DGameplayActor: Mesh generation completed successfully!"));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("MRS3DGameplayActor: Mesh generation failed"));
+		}
+	}
+}
+
+void AMRS3DGameplayActor::OnAsyncGenerationProgress(int32 JobID, float Progress)
+{
+	if (JobID == CurrentAsyncJobID)
+	{
+		// Log progress periodically (every 25%)
+		static int32 LastLoggedProgress = -1;
+		int32 ProgressPercent = FMath::FloorToInt(Progress * 100.0f);
+		
+		if (ProgressPercent >= LastLoggedProgress + 25)
+		{
+			UE_LOG(LogTemp, Log, TEXT("MRS3DGameplayActor: Async generation progress: %d%%"), ProgressPercent);
+			LastLoggedProgress = ProgressPercent;
 		}
 	}
 }

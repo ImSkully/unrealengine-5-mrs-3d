@@ -97,6 +97,39 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
 	void EnableMarchingCubesGeneration(bool bEnable = true);
 
+	/**
+	 * Generate mesh asynchronously for large datasets
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	int32 GenerateAsyncMesh(bool bForceAsync = false);
+
+	/**
+	 * Cancel active async generation
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	bool CancelAsyncGeneration();
+
+	/**
+	 * Get async generation progress
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	float GetAsyncGenerationProgress() const;
+
+	/**
+	 * Check if async generation is active
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	bool IsAsyncGenerationActive() const;
+
+	/**
+	 * Event handlers for async generation
+	 */
+	UFUNCTION()
+	void OnAsyncGenerationComplete(bool bSuccess, int32 JobID);
+
+	UFUNCTION()
+	void OnAsyncGenerationProgress(int32 JobID, float Progress);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Gameplay")
 	UProceduralGenerator* ProceduralGenerator;
 
@@ -105,6 +138,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Gameplay")
 	bool bEnableDebugVisualization;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|AsyncGeneration")
+	bool bEnableAsyncGeneration;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|AsyncGeneration")
+	int32 AsyncGenerationThreshold;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|PlaneDetection")
 	bool bAutoPlaneDetectionEnabled;
@@ -120,6 +159,10 @@ protected:
 	UMRBitmapMapper* BitmapMapper;
 
 	bool bARDataReceptionEnabled;
+
+	// Async generation tracking
+	int32 CurrentAsyncJobID;
+	bool bAsyncGenerationInProgress;
 
 	void OnBitmapPointsUpdated(const TArray<FBitmapPoint>& Points);
 	

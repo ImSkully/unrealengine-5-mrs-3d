@@ -1,5 +1,6 @@
 #include "ProceduralGenerator.h"
 #include "MRBitmapMapper.h"
+#include "MeshGenerationManager.h"
 #include "Engine/Engine.h"
 #include "GameFramework/Actor.h"
 
@@ -8,8 +9,12 @@ UProceduralGenerator::UProceduralGenerator()
 	, VoxelSize(10.0f)
 	, bAutoUpdate(true)
 	, UpdateInterval(0.1f)
+	, AsyncGenerationThreshold(10000)
+	, bEnableAsyncGeneration(true)
+	, bShowAsyncProgress(true)
 	, TimeSinceLastUpdate(0.0f)
 	, MarchingCubesGenerator(nullptr)
+	, MeshGenerationManager(nullptr)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	
@@ -23,6 +28,17 @@ UProceduralGenerator::UProceduralGenerator()
 
 UProceduralGenerator::~UProceduralGenerator()
 {
+	// Cancel all active async jobs
+	if (MeshGenerationManager)
+	{
+		FScopeLock Lock(&AsyncJobsMutex);
+		for (int32 JobID : ActiveAsyncJobs)
+		{
+			MeshGenerationManager->CancelJob(JobID);
+		}
+		ActiveAsyncJobs.Empty();
+	}
+	
 	if (MarchingCubesGenerator)
 	{
 		delete MarchingCubesGenerator;
@@ -35,6 +51,18 @@ void UProceduralGenerator::BeginPlay()
 	Super::BeginPlay();
 	
 	CreateProceduralMeshIfNeeded();
+	
+	// Get mesh generation manager for async operations
+	if (GetWorld() && GetWorld()->GetGameInstance())
+	{
+		MeshGenerationManager = GetWorld()->GetGameInstance()->GetSubsystem<UMeshGenerationManager>();
+	}
+	
+	if (!MeshGenerationManager)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ProceduralGenerator: MeshGenerationManager not available - async generation disabled"));
+		bEnableAsyncGeneration = false;
+	}
 	
 	// Subscribe to bitmap mapper updates
 	if (UGameInstance* GameInstance = GetWorld()->GetGameInstance())
@@ -49,6 +77,23 @@ void UProceduralGenerator::BeginPlay()
 void UProceduralGenerator::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	
+	// Update async job progress and cleanup completed jobs
+	if (bEnableAsyncGeneration && MeshGenerationManager)
+	{
+		CleanupCompletedAsyncJobs();
+		
+		// Broadcast progress updates if enabled
+		if (bShowAsyncProgress)
+		{
+			FScopeLock Lock(&AsyncJobsMutex);
+			for (int32 JobID : ActiveAsyncJobs)
+			{
+				float Progress = GetAsyncGenerationProgress(JobID);
+				OnAsyncGenerationProgress.Broadcast(JobID, Progress);
+			}
+		}
+	}
 
 	if (bAutoUpdate)
 	{
@@ -75,6 +120,21 @@ void UProceduralGenerator::TickComponent(float DeltaTime, ELevelTick TickType, F
 
 void UProceduralGenerator::GenerateFromBitmapPoints(const TArray<FBitmapPoint>& Points)
 {
+	// Check if we should use async generation for large datasets
+	if (ShouldUseAsyncGeneration(Points.Num()))
+	{
+		int32 JobID = GenerateAsyncFromBitmapPoints(Points);
+		if (JobID != -1)
+		{
+			UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Started async generation (Job %d) for %d points"), JobID, Points.Num());
+			return;
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("ProceduralGenerator: Failed to start async generation, falling back to sync"));
+		}
+	}
+	
 	// Memory-aware caching - only cache if reasonable size
 	if (Points.Num() <= 100000)
 	{
@@ -505,18 +565,231 @@ void UProceduralGenerator::ConvertMCTrianglesToMesh(const TArray<FMCTriangle>& M
 			{
 				Tangent = FVector::CrossProduct(Normal, FVector::UpVector).GetSafeNormal();
 			}
-		}
-		Tangents.Add(FProcMeshTangent(Tangent, false));
 	}
-	
-	// Create mesh section
-	ProceduralMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
-	
-	// Apply material if set
-	if (DefaultMaterial)
+	Tangents.Add(FProcMeshTangent(Tangent, false));
+}
+
+// Create mesh section
+ProceduralMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, VertexColors, Tangents, true);
+
+// Apply material if set
+if (DefaultMaterial)
+{
+	ProceduralMesh->SetMaterial(0, DefaultMaterial);
+}
+
+UE_LOG(LogTemp, Log, TEXT("Created mesh with %d vertices and %d triangles"), Vertices.Num(), Triangles.Num() / 3);
+}
+
+// Async Generation Methods
+
+int32 UProceduralGenerator::GenerateAsyncFromBitmapPoints(const TArray<FBitmapPoint>& Points, bool bForceAsync)
+{
+	if (!bEnableAsyncGeneration || !MeshGenerationManager)
 	{
-		ProceduralMesh->SetMaterial(0, DefaultMaterial);
+		UE_LOG(LogTemp, Warning, TEXT("ProceduralGenerator: Async generation not available"));
+		return -1;
+	}
+
+	// Check if we should use async generation
+	if (!bForceAsync && !ShouldUseAsyncGeneration(Points.Num()))
+	{
+		return -1;
+	}
+
+	EMeshGenerationTaskType TaskType = GetTaskTypeFromGenerationType();
+	
+	// Submit job to mesh generation manager
+	FOnMeshGenerationComplete CompletionCallback;
+	CompletionCallback.BindUObject(this, &UProceduralGenerator::ApplyAsyncResult);
+	
+	int32 JobID = MeshGenerationManager->SubmitMeshGenerationJob(
+		Points,
+		TaskType,
+		MarchingCubesConfig,
+		VoxelSize,
+		CompletionCallback
+	);
+
+	if (JobID != -1)
+	{
+		// Add to active jobs list
+		FScopeLock Lock(&AsyncJobsMutex);
+		ActiveAsyncJobs.Add(JobID);
+		
+		UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Started async job %d for %d points"), JobID, Points.Num());
+	}
+
+	return JobID;
+}
+
+bool UProceduralGenerator::CancelAsyncGeneration(int32 JobID)
+{
+	if (!MeshGenerationManager)
+	{
+		return false;
+	}
+
+	bool bCancelled = MeshGenerationManager->CancelJob(JobID);
+	
+	if (bCancelled)
+	{
+		FScopeLock Lock(&AsyncJobsMutex);
+		ActiveAsyncJobs.Remove(JobID);
+		UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Cancelled async job %d"), JobID);
+	}
+
+	return bCancelled;
+}
+
+float UProceduralGenerator::GetAsyncGenerationProgress(int32 JobID) const
+{
+	if (!MeshGenerationManager)
+	{
+		return 0.0f;
+	}
+
+	FMeshGenerationJobInfo JobInfo;
+	if (MeshGenerationManager->GetJobInfo(JobID, JobInfo))
+	{
+		return JobInfo.Progress;
+	}
+
+	return 0.0f;
+}
+
+bool UProceduralGenerator::IsAsyncGenerationActive() const
+{
+	FScopeLock Lock(&AsyncJobsMutex);
+	return ActiveAsyncJobs.Num() > 0;
+}
+
+void UProceduralGenerator::SetAsyncThreshold(int32 NewThreshold)
+{
+	AsyncGenerationThreshold = FMath::Max(1000, NewThreshold);
+	UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Async threshold set to %d points"), AsyncGenerationThreshold);
+}
+
+bool UProceduralGenerator::ShouldUseAsyncGeneration(int32 PointCount) const
+{
+	return bEnableAsyncGeneration && 
+		   MeshGenerationManager && 
+		   PointCount >= AsyncGenerationThreshold;
+}
+
+EMeshGenerationTaskType UProceduralGenerator::GetTaskTypeFromGenerationType() const
+{
+	switch (GenerationType)
+	{
+	case EProceduralGenerationType::PointCloud:
+		return EMeshGenerationTaskType::PointCloud;
+	case EProceduralGenerationType::Mesh:
+		return EMeshGenerationTaskType::Mesh;
+	case EProceduralGenerationType::Voxel:
+		return EMeshGenerationTaskType::Voxel;
+	case EProceduralGenerationType::MarchingCubes:
+		return EMeshGenerationTaskType::MarchingCubes;
+	case EProceduralGenerationType::Surface:
+	default:
+		return EMeshGenerationTaskType::Mesh;
+	}
+}
+
+void UProceduralGenerator::OnAsyncJobCompleted(int32 JobID, bool bSuccess)
+{
+	UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Async job %d completed %s"), 
+		JobID, bSuccess ? TEXT("successfully") : TEXT("with failure"));
+	
+	// Remove from active jobs
+	{
+		FScopeLock Lock(&AsyncJobsMutex);
+		ActiveAsyncJobs.Remove(JobID);
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Created mesh with %d vertices and %d triangles"), Vertices.Num(), Triangles.Num() / 3);
+	// Broadcast completion event
+	OnAsyncGenerationComplete.Broadcast(bSuccess, JobID);
+}
+
+void UProceduralGenerator::ApplyAsyncResult(int32 JobID, const FMeshGenerationResult& Result)
+{
+	if (!MeshGenerationManager)
+	{
+		return;
+	}
+
+	// Get the result from the manager
+	FMeshGenerationResult JobResult;
+	if (!MeshGenerationManager->GetJobResult(JobID, JobResult))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ProceduralGenerator: Failed to get result for job %d"), JobID);
+		OnAsyncJobCompleted(JobID, false);
+		return;
+	}
+
+	// Apply result to procedural mesh on game thread
+	AsyncTask(ENamedThreads::GameThread, [this, JobResult, JobID]()
+	{
+		CreateProceduralMeshIfNeeded();
+		
+		// Clear existing mesh
+		ProceduralMesh->ClearAllMeshSections();
+		
+		// Apply the generated mesh data
+		ProceduralMesh->CreateMeshSection(0, 
+			JobResult.Vertices, 
+			JobResult.Triangles, 
+			JobResult.Normals, 
+			JobResult.UV0, 
+			JobResult.VertexColors, 
+			JobResult.Tangents, 
+			true);
+		
+		// Apply material if set
+		if (DefaultMaterial)
+		{
+			ProceduralMesh->SetMaterial(0, DefaultMaterial);
+		}
+		
+		UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator: Applied async result - %d vertices, %d triangles, %.3fs execution time"), 
+			JobResult.Vertices.Num(), JobResult.TriangleCount, JobResult.ExecutionTime);
+		
+		OnAsyncJobCompleted(JobID, true);
+	});
+}
+
+void UProceduralGenerator::CleanupCompletedAsyncJobs()
+{
+	if (!MeshGenerationManager)
+	{
+		return;
+	}
+
+	FScopeLock Lock(&AsyncJobsMutex);
+	
+	// Check for completed jobs and remove them from active list
+	TArray<int32> JobsToRemove;
+	
+	for (int32 JobID : ActiveAsyncJobs)
+	{
+		FMeshGenerationJobInfo JobInfo;
+		if (MeshGenerationManager->GetJobInfo(JobID, JobInfo))
+		{
+			if (JobInfo.Status == EMeshGenerationTaskStatus::Completed ||
+				JobInfo.Status == EMeshGenerationTaskStatus::Failed ||
+				JobInfo.Status == EMeshGenerationTaskStatus::Cancelled)
+			{
+				JobsToRemove.Add(JobID);
+			}
+		}
+		else
+		{
+			// Job doesn't exist anymore, remove it
+			JobsToRemove.Add(JobID);
+		}
+	}
+	
+	for (int32 JobID : JobsToRemove)
+	{
+		ActiveAsyncJobs.Remove(JobID);
+	}
 }
