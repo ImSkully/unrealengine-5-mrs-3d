@@ -5,7 +5,13 @@
 #include "ProceduralMeshComponent.h"
 #include "BitmapPoint.h"
 #include "MarchingCubes.h"
+#include "MeshGenerationTask.h"
 #include "ProceduralGenerator.generated.h"
+
+class UMeshGenerationManager;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAsyncMeshGenerationComplete, bool, bSuccess, int32, JobID);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAsyncMeshProgress, int32, JobID, float, Progress);
 
 UENUM(BlueprintType)
 enum class EProceduralGenerationType : uint8
@@ -90,6 +96,23 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|MarchingCubes")
 	FMarchingCubesConfig MarchingCubesConfig;
 
+	// Worker Thread Configuration
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|AsyncGeneration")
+	int32 AsyncGenerationThreshold;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|AsyncGeneration")
+	bool bEnableAsyncGeneration;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|AsyncGeneration")
+	bool bShowAsyncProgress;
+
+	/** Events for async generation */
+	UPROPERTY(BlueprintAssignable, Category = "Events")
+	FOnAsyncMeshGenerationComplete OnAsyncGenerationComplete;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events")
+	FOnAsyncMeshProgress OnAsyncGenerationProgress;
+
 	/**
 	 * Set marching cubes configuration
 	 */
@@ -108,6 +131,45 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|MarchingCubes")
 	void UpdateGridBoundsFromPoints(const TArray<FBitmapPoint>& Points, float Padding = 100.0f);
 
+	/**
+	 * Generate mesh asynchronously using worker threads for large datasets
+	 * @param Points - Input bitmap points
+	 * @param bForceAsync - Force async generation even for small datasets
+	 * @return Job ID for tracking, or -1 if generated synchronously
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	int32 GenerateAsyncFromBitmapPoints(const TArray<FBitmapPoint>& Points, bool bForceAsync = false);
+
+	/**
+	 * Cancel an active async generation job
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	bool CancelAsyncGeneration(int32 JobID);
+
+	/**
+	 * Get progress of async generation job
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	float GetAsyncGenerationProgress(int32 JobID) const;
+
+	/**
+	 * Check if async generation is currently running
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	bool IsAsyncGenerationActive() const;
+
+	/**
+	 * Set threshold for using async generation
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	void SetAsyncThreshold(int32 NewThreshold);
+
+	/**
+	 * Get current async generation threshold
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
+	int32 GetAsyncThreshold() const { return AsyncGenerationThreshold; }
+
 protected:
 	UPROPERTY()
 	UProceduralMeshComponent* ProceduralMesh;
@@ -120,6 +182,13 @@ protected:
 
 	float TimeSinceLastUpdate;
 
+	// Worker thread management
+	UPROPERTY()
+	UMeshGenerationManager* MeshGenerationManager;
+
+	TArray<int32> ActiveAsyncJobs;
+	mutable FCriticalSection AsyncJobsMutex;
+
 	void GeneratePointCloud(const TArray<FBitmapPoint>& Points);
 	void GenerateMesh(const TArray<FBitmapPoint>& Points);
 	void GenerateVoxels(const TArray<FBitmapPoint>& Points);
@@ -128,4 +197,12 @@ protected:
 	
 	void CreateProceduralMeshIfNeeded();
 	void ConvertMCTrianglesToMesh(const TArray<FMCTriangle>& MCTriangles);
+
+	// Async generation support
+	bool ShouldUseAsyncGeneration(int32 PointCount) const;
+	EMeshGenerationTaskType GetTaskTypeFromGenerationType() const;
+	UFUNCTION()
+	void OnAsyncJobCompleted(int32 JobID, bool bSuccess);
+	void ApplyAsyncResult(int32 JobID, const FMeshGenerationResult& Result);
+	void CleanupCompletedAsyncJobs();
 };
