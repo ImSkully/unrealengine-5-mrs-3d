@@ -12,9 +12,20 @@ UProceduralGenerator::UProceduralGenerator()
 	, AsyncGenerationThreshold(10000)
 	, bEnableAsyncGeneration(true)
 	, bShowAsyncProgress(true)
+	, bFreezeMeshOnTrackingLoss(true)
+	, bAutoRecoverFromTrackingLoss(true)
+	, TrackingQualityThreshold(0.7f)
+	, MaxTrackingLossDuration(30.0f)
+	, bUseSpatialAnchors(true)
 	, TimeSinceLastUpdate(0.0f)
 	, MarchingCubesGenerator(nullptr)
 	, MeshGenerationManager(nullptr)
+	, CurrentTrackingQuality(1.0f)
+	, CurrentTrackingState(ETrackingState::FullTracking)
+	, TrackingLossStartTime(0.0f)
+	, bIsTrackingLost(false)
+	, LastKnownAnchorTransform(FTransform::Identity)
+	, CurrentAnchorID(TEXT(""))
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	
@@ -791,5 +802,162 @@ void UProceduralGenerator::CleanupCompletedAsyncJobs()
 	for (int32 JobID : JobsToRemove)
 	{
 		ActiveAsyncJobs.Remove(JobID);
+	}
+}
+
+void UProceduralGenerator::HandleTrackingLoss(ETrackingState PreviousState, const FString& LossReason)
+{
+	FScopeLock Lock(&TrackingStateMutex);
+	
+	if (bIsTrackingLost)
+	{
+		return; // Already handling tracking loss
+	}
+	
+	bIsTrackingLost = true;
+	TrackingLossStartTime = FPlatformTime::Seconds();
+	CurrentTrackingState = ETrackingState::TrackingLost;
+	
+	UE_LOG(LogTemp, Warning, TEXT("AR Tracking Lost: %s (Previous State: %d)"), *LossReason, (int32)PreviousState);
+	
+	// Store current geometry snapshot for potential recovery
+	if (bUseSpatialAnchors && !CachedPoints.IsEmpty())
+	{
+		PreLossGeometrySnapshot = CachedPoints;
+		StoreSpatialAnchor(GetOwner()->GetActorTransform(), FString::Printf(TEXT("PreLoss_%d"), FMath::RandRange(1000, 9999)));
+	}
+	
+	// Freeze mesh if configured
+	if (bFreezeMeshOnTrackingLoss && ProceduralMesh)
+	{
+		ProceduralMesh->SetVisibility(false);
+	}
+	
+	// Cancel active async jobs to preserve resources
+	if (MeshGenerationManager)
+	{
+		for (int32 JobID : ActiveAsyncJobs)
+		{
+			MeshGenerationManager->CancelJob(JobID);
+		}
+		ActiveAsyncJobs.Empty();
+	}
+	
+	// Broadcast tracking loss event
+	OnTrackingLoss.Broadcast(PreviousState);
+}
+
+void UProceduralGenerator::HandleTrackingRecovery(ETrackingState NewState, float LostDuration)
+{
+	FScopeLock Lock(&TrackingStateMutex);
+	
+	if (!bIsTrackingLost)
+	{
+		return; // Not in tracking loss state
+	}
+	
+	bIsTrackingLost = false;
+	CurrentTrackingState = NewState;
+	
+	UE_LOG(LogTemp, Log, TEXT("AR Tracking Recovered: New State %d after %.2f seconds"), (int32)NewState, LostDuration);
+	
+	// Restore mesh visibility
+	if (bFreezeMeshOnTrackingLoss && ProceduralMesh)
+	{
+		ProceduralMesh->SetVisibility(true);
+	}
+	
+	// Auto-recover geometry if enabled
+	if (bAutoRecoverFromTrackingLoss && !PreLossGeometrySnapshot.IsEmpty())
+	{
+		// Restore from spatial anchor if available
+		if (bUseSpatialAnchors && !CurrentAnchorID.IsEmpty())
+		{
+			if (!RestoreFromSpatialAnchor(CurrentAnchorID))
+			{
+				// Fallback to geometry snapshot
+				GenerateFromBitmapPoints(PreLossGeometrySnapshot);
+			}
+		}
+		else
+		{
+			// Direct geometry restoration
+			GenerateFromBitmapPoints(PreLossGeometrySnapshot);
+		}
+	}
+	
+	// Broadcast tracking recovery event
+	OnTrackingRecovery.Broadcast(NewState, LostDuration);
+}
+
+void UProceduralGenerator::StoreSpatialAnchor(const FTransform& AnchorTransform, const FString& AnchorID)
+{
+	FScopeLock Lock(&TrackingStateMutex);
+	
+	LastKnownAnchorTransform = AnchorTransform;
+	CurrentAnchorID = AnchorID.IsEmpty() ? FString::Printf(TEXT("Anchor_%d"), FMath::RandRange(1000, 9999)) : AnchorID;
+	
+	UE_LOG(LogTemp, Log, TEXT("Spatial anchor stored: %s at %s"), *CurrentAnchorID, *AnchorTransform.ToString());
+	
+	// In a real implementation, this would interface with the AR platform's spatial anchor system
+	// For now, we just store the transform locally
+}
+
+bool UProceduralGenerator::RestoreFromSpatialAnchor(const FString& AnchorID)
+{
+	FScopeLock Lock(&TrackingStateMutex);
+	
+	if (AnchorID != CurrentAnchorID || LastKnownAnchorTransform.Equals(FTransform::Identity))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Failed to restore from spatial anchor: %s"), *AnchorID);
+		return false;
+	}
+	
+	// Restore actor transform
+	if (AActor* Owner = GetOwner())
+	{
+		Owner->SetActorTransform(LastKnownAnchorTransform);
+	}
+	
+	// Restore geometry if available
+	if (!PreLossGeometrySnapshot.IsEmpty())
+	{
+		GenerateFromBitmapPoints(PreLossGeometrySnapshot);
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Successfully restored from spatial anchor: %s"), *AnchorID);
+	return true;
+}
+
+void UProceduralGenerator::UpdateTrackingQuality(float NewQuality)
+{
+	FScopeLock Lock(&TrackingStateMutex);
+	
+	float OldQuality = CurrentTrackingQuality;
+	CurrentTrackingQuality = FMath::Clamp(NewQuality, 0.0f, 1.0f);
+	
+	// Check for significant quality changes
+	if (FMath::Abs(OldQuality - CurrentTrackingQuality) > 0.1f)
+	{
+		OnTrackingQualityChange.Broadcast(OldQuality, CurrentTrackingQuality);
+		
+		UE_LOG(LogTemp, Log, TEXT("Tracking quality changed: %.2f -> %.2f"), OldQuality, CurrentTrackingQuality);
+		
+		// Handle low quality threshold
+		if (CurrentTrackingQuality < TrackingQualityThreshold && !bIsTrackingLost)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Tracking quality below threshold: %.2f < %.2f"), CurrentTrackingQuality, TrackingQualityThreshold);
+			
+			// Reduce generation frequency to save resources
+			if (bAutoUpdate)
+			{
+				UpdateInterval = FMath::Max(UpdateInterval * 2.0f, 0.5f);
+			}
+		}
+		else if (CurrentTrackingQuality >= TrackingQualityThreshold && OldQuality < TrackingQualityThreshold)
+		{
+			// Restore normal update frequency
+			UpdateInterval = 0.1f;
+		}
 	}
 }
