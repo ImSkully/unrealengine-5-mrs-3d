@@ -12,6 +12,9 @@ class UMeshGenerationManager;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAsyncMeshGenerationComplete, bool, bSuccess, int32, JobID);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAsyncMeshProgress, int32, JobID, float, Progress);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTrackingLoss, ETrackingState, PreviousState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnTrackingRecovery, ETrackingState, NewState, float, LostDuration);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnTrackingQualityChange, float, OldQuality, float, NewQuality);
 
 UENUM(BlueprintType)
 enum class EProceduralGenerationType : uint8
@@ -106,12 +109,38 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|AsyncGeneration")
 	bool bShowAsyncProgress;
 
+	// AR Tracking Loss Configuration
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bFreezeMeshOnTrackingLoss;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bAutoRecoverFromTrackingLoss;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	float TrackingQualityThreshold;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	float MaxTrackingLossDuration;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bUseSpatialAnchors;
+
 	/** Events for async generation */
 	UPROPERTY(BlueprintAssignable, Category = "Events")
 	FOnAsyncMeshGenerationComplete OnAsyncGenerationComplete;
 
 	UPROPERTY(BlueprintAssignable, Category = "Events")
 	FOnAsyncMeshProgress OnAsyncGenerationProgress;
+
+	/** Events for tracking loss/recovery */
+	UPROPERTY(BlueprintAssignable, Category = "Events")
+	FOnTrackingLoss OnTrackingLoss;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events")
+	FOnTrackingRecovery OnTrackingRecovery;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events")
+	FOnTrackingQualityChange OnTrackingQualityChange;
 
 	/**
 	 * Set marching cubes configuration
@@ -170,6 +199,48 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|AsyncGeneration")
 	int32 GetAsyncThreshold() const { return AsyncGenerationThreshold; }
 
+	/**
+	 * Handle AR tracking loss
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void HandleTrackingLoss(ETrackingState PreviousState, const FString& LossReason = TEXT(""));
+
+	/**
+	 * Handle AR tracking recovery
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void HandleTrackingRecovery(ETrackingState NewState, float LostDuration);
+
+	/**
+	 * Store spatial anchor for mesh
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void StoreSpatialAnchor(const FTransform& AnchorTransform, const FString& AnchorID = TEXT(""));
+
+	/**
+	 * Restore mesh from spatial anchor
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	bool RestoreFromSpatialAnchor(const FString& AnchorID);
+
+	/**
+	 * Update tracking quality and handle quality changes
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void UpdateTrackingQuality(float NewQuality);
+
+	/**
+	 * Get current tracking quality
+	 */
+	UFUNCTION(BlueprintPure, Category = "MRS3D|Tracking")
+	float GetCurrentTrackingQuality() const { return CurrentTrackingQuality; }
+
+	/**
+	 * Check if mesh should be frozen during tracking loss
+	 */
+	UFUNCTION(BlueprintPure, Category = "MRS3D|Tracking")
+	bool ShouldFreezeMeshDuringTrackingLoss() const { return bFreezeMeshOnTrackingLoss; }
+
 protected:
 	UPROPERTY()
 	UProceduralMeshComponent* ProceduralMesh;
@@ -188,6 +259,16 @@ protected:
 
 	TArray<int32> ActiveAsyncJobs;
 	mutable FCriticalSection AsyncJobsMutex;
+
+	// AR Tracking Loss Management
+	float CurrentTrackingQuality;
+	ETrackingState CurrentTrackingState;
+	float TrackingLossStartTime;
+	bool bIsTrackingLost;
+	FTransform LastKnownAnchorTransform;
+	FString CurrentAnchorID;
+	TArray<FBitmapPoint> PreLossGeometrySnapshot;
+	mutable FCriticalSection TrackingStateMutex;
 
 	void GeneratePointCloud(const TArray<FBitmapPoint>& Points);
 	void GenerateMesh(const TArray<FBitmapPoint>& Points);

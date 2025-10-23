@@ -6,7 +6,14 @@
 #include "MRBitmapMapper.h"
 #include "PlaneDetection.h"
 #include "PlaneDetectionSubsystem.h"
+#include "MRTrackingStateManager.h"
 #include "MRS3DGameplayActor.generated.h"
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnARTrackingLoss, ETrackingState, PreviousState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnARTrackingRecovery, ETrackingState, NewState, float, LostDuration);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnARTrackingQualityChanged, float, OldQuality, float, NewQuality);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSpatialAnchorLost, FString, AnchorID);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSpatialAnchorRecovered, FString, AnchorID);
 
 /**
  * Gameplay actor that integrates procedural generation with AR/MR systems
@@ -48,6 +55,54 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "MRS3D|Gameplay")
 	void UpdateTrackingState(ETrackingState NewState, float Quality = 1.0f, const FString& LossReason = TEXT(""));
+
+	/**
+	 * Handle AR tracking loss with automatic response
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void HandleTrackingLoss(ETrackingState PreviousState, const FString& LossReason = TEXT(""));
+
+	/**
+	 * Handle AR tracking recovery with geometry restoration
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void HandleTrackingRecovery(ETrackingState NewState, float LostDuration);
+
+	/**
+	 * Force spatial repositioning for tracking recovery
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void ForceSpatialRepositioning();
+
+	/**
+	 * Set tracking loss response configuration
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MRS3D|Tracking")
+	void SetTrackingLossResponse(bool bPauseGeneration, bool bShowWarning, bool bAutoReposition);
+
+	/**
+	 * Get current tracking state information
+	 */
+	UFUNCTION(BlueprintPure, Category = "MRS3D|Tracking")
+	ETrackingState GetCurrentTrackingState() const;
+
+	/**
+	 * Get tracking quality (0.0 to 1.0)
+	 */
+	UFUNCTION(BlueprintPure, Category = "MRS3D|Tracking")
+	float GetTrackingQuality() const;
+
+	/**
+	 * Check if currently experiencing tracking loss
+	 */
+	UFUNCTION(BlueprintPure, Category = "MRS3D|Tracking")
+	bool IsTrackingLost() const;
+
+	/**
+	 * Get time since tracking was lost (in seconds)
+	 */
+	UFUNCTION(BlueprintPure, Category = "MRS3D|Tracking")
+	float GetTrackingLossDuration() const;
 
 	/**
 	 * Enable/disable plane detection
@@ -130,6 +185,22 @@ public:
 	UFUNCTION()
 	void OnAsyncGenerationProgress(int32 JobID, float Progress);
 
+	/** AR Tracking Loss Events */
+	UPROPERTY(BlueprintAssignable, Category = "Events|Tracking")
+	FOnARTrackingLoss OnARTrackingLoss;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events|Tracking")
+	FOnARTrackingRecovery OnARTrackingRecovery;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events|Tracking")
+	FOnARTrackingQualityChanged OnARTrackingQualityChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events|Tracking")
+	FOnSpatialAnchorLost OnSpatialAnchorLost;
+
+	UPROPERTY(BlueprintAssignable, Category = "Events|Tracking")
+	FOnSpatialAnchorRecovered OnSpatialAnchorRecovered;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Gameplay")
 	UProceduralGenerator* ProceduralGenerator;
 
@@ -154,6 +225,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|PlaneDetection")
 	float PlaneVisualizationDuration;
 
+	/** AR Tracking Loss Configuration */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bPauseGenerationOnTrackingLoss;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bShowTrackingLossWarning;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bAutoRepositionOnRecovery;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	float TrackingQualityThreshold;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	float MaxTrackingLossTime;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MRS3D|Tracking")
+	bool bUseSpatialAnchors;
+
 protected:
 	UPROPERTY()
 	UMRBitmapMapper* BitmapMapper;
@@ -163,6 +253,15 @@ protected:
 	// Async generation tracking
 	int32 CurrentAsyncJobID;
 	bool bAsyncGenerationInProgress;
+
+	// AR Tracking Loss Management
+	ETrackingState CurrentTrackingState;
+	float CurrentTrackingQuality;
+	float TrackingLossStartTime;
+	bool bIsCurrentlyTrackingLost;
+	FString LastTrackingLossReason;
+	FTransform PreLossActorTransform;
+	UMRTrackingStateManager* TrackingStateManager;
 
 	void OnBitmapPointsUpdated(const TArray<FBitmapPoint>& Points);
 	
@@ -178,6 +277,26 @@ protected:
 	
 	UFUNCTION()
 	void OnTrackingStateChanged(ETrackingState NewState);
+	
+	// Internal tracking event handlers
+	UFUNCTION()
+	void OnTrackingLostInternal(float LostDuration);
+	
+	UFUNCTION()
+	void OnTrackingRecoveredInternal();
+	
+	UFUNCTION()
+	void OnTrackingQualityChangedInternal(EMRTrackingQuality OldQuality, EMRTrackingQuality NewQuality);
+	
+	// ProceduralGenerator tracking event handlers
+	UFUNCTION()
+	void OnProceduralGeneratorTrackingLoss(ETrackingState PreviousState);
+	
+	UFUNCTION()
+	void OnProceduralGeneratorTrackingRecovery(ETrackingState NewState, float LostDuration);
+	
+	UFUNCTION()
+	void OnProceduralGeneratorTrackingQualityChange(float OldQuality, float NewQuality);
 	
 	// Helper methods
 	void VisualizePlanes();
