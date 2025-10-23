@@ -71,7 +71,7 @@ void UMRTrackingStateManager::UpdateTrackingState(ETrackingState NewState, const
 
 bool UMRTrackingStateManager::IsTrackingStable() const
 {
-	if (SessionInfo.TrackingState == ETrackingState::NotTracking)
+	if (SessionInfo.TrackingState == ETrackingState::NotTracking || SessionInfo.TrackingState == ETrackingState::TrackingLost)
 	{
 		return false;
 	}
@@ -87,7 +87,7 @@ bool UMRTrackingStateManager::IsTrackingStable() const
 
 bool UMRTrackingStateManager::ShouldAttemptRecovery() const
 {
-	if (SessionInfo.TrackingState != ETrackingState::NotTracking)
+	if (SessionInfo.TrackingState != ETrackingState::NotTracking && SessionInfo.TrackingState != ETrackingState::TrackingLost)
 	{
 		return false;
 	}
@@ -188,7 +188,7 @@ void UMRTrackingStateManager::UpdateSessionStats()
 	SessionInfo.SessionDuration = CurrentTime - SessionInfo.SessionStartTime;
 	
 	// Update uptime if currently tracking
-	if (SessionInfo.TrackingState == ETrackingState::Tracking)
+	if (SessionInfo.TrackingState == ETrackingState::FullTracking || SessionInfo.TrackingState == ETrackingState::LimitedTracking)
 	{
 		static float LastUptimeUpdate = CurrentTime;
 		TotalUptime += CurrentTime - LastUptimeUpdate;
@@ -238,7 +238,7 @@ bool UMRTrackingStateManager::AnalyzeTrackingStability() const
 		
 		TotalRecentCount++;
 		
-		if (Entry.State == ETrackingState::Tracking && Entry.Confidence >= NormalQualityThreshold)
+		if ((Entry.State == ETrackingState::FullTracking || Entry.State == ETrackingState::LimitedTracking) && Entry.Confidence >= NormalQualityThreshold)
 		{
 			StableCount++;
 		}
@@ -254,7 +254,8 @@ void UMRTrackingStateManager::HandleStateTransition(ETrackingState OldState, ETr
 	const float CurrentTime = FPlatformTime::Seconds();
 	
 	// Handle transition to lost tracking
-	if (OldState == ETrackingState::Tracking && NewState == ETrackingState::NotTracking)
+	if ((OldState == ETrackingState::FullTracking || OldState == ETrackingState::LimitedTracking) && 
+		(NewState == ETrackingState::TrackingLost || NewState == ETrackingState::NotTracking))
 	{
 		TrackingLostTime = CurrentTime;
 		SessionInfo.TrackingInterruptions++;
@@ -266,7 +267,8 @@ void UMRTrackingStateManager::HandleStateTransition(ETrackingState OldState, ETr
 	}
 	
 	// Handle transition to recovered tracking
-	else if (OldState == ETrackingState::NotTracking && NewState == ETrackingState::Tracking)
+	else if ((OldState == ETrackingState::TrackingLost || OldState == ETrackingState::NotTracking) && 
+			 (NewState == ETrackingState::FullTracking || NewState == ETrackingState::LimitedTracking))
 	{
 		TrackingRecoveredTime = CurrentTime;
 		OnTrackingRecovered.Broadcast();

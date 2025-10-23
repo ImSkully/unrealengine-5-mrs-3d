@@ -14,6 +14,19 @@ AMRS3DGameplayActor::AMRS3DGameplayActor()
 	, bAutoPlaneDetectionEnabled(false)
 	, bVisualizeDetectedPlanes(true)
 	, PlaneVisualizationDuration(5.0f)
+	, bPauseGenerationOnTrackingLoss(true)
+	, bShowTrackingLossWarning(true)
+	, bAutoRepositionOnRecovery(true)
+	, TrackingQualityThreshold(0.7f)
+	, MaxTrackingLossTime(30.0f)
+	, bUseSpatialAnchors(true)
+	, CurrentTrackingState(ETrackingState::FullTracking)
+	, CurrentTrackingQuality(1.0f)
+	, TrackingLossStartTime(0.0f)
+	, bIsCurrentlyTrackingLost(false)
+	, LastTrackingLossReason(TEXT(""))
+	, PreLossActorTransform(FTransform::Identity)
+	, TrackingStateManager(nullptr)
 {
 	PrimaryActorTick.bCanEverTick = true;
 
@@ -29,11 +42,20 @@ void AMRS3DGameplayActor::BeginPlay()
 	if (UGameInstance* GameInstance = GetWorld()->GetGameInstance())
 	{
 		BitmapMapper = GameInstance->GetSubsystem<UMRBitmapMapper>();
+		TrackingStateManager = GameInstance->GetSubsystem<UMRTrackingStateManager>();
 		
 		if (BitmapMapper)
 		{
 			BitmapMapper->OnBitmapPointsUpdated.AddDynamic(this, &AMRS3DGameplayActor::OnBitmapPointsUpdated);
 			BitmapMapper->SetAutoPlaneDetectionEnabled(bAutoPlaneDetectionEnabled);
+		}
+		
+		// Bind tracking state manager events
+		if (TrackingStateManager)
+		{
+			TrackingStateManager->OnTrackingLost.AddDynamic(this, &AMRS3DGameplayActor::OnTrackingLostInternal);
+			TrackingStateManager->OnTrackingRecovered.AddDynamic(this, &AMRS3DGameplayActor::OnTrackingRecoveredInternal);
+			TrackingStateManager->OnTrackingQualityChanged.AddDynamic(this, &AMRS3DGameplayActor::OnTrackingQualityChangedInternal);
 		}
 		
 		// Get plane detection subsystem and bind events
@@ -51,6 +73,11 @@ void AMRS3DGameplayActor::BeginPlay()
 	{
 		ProceduralGenerator->OnAsyncGenerationComplete.AddDynamic(this, &AMRS3DGameplayActor::OnAsyncGenerationComplete);
 		ProceduralGenerator->OnAsyncGenerationProgress.AddDynamic(this, &AMRS3DGameplayActor::OnAsyncGenerationProgress);
+		
+		// Bind tracking events
+		ProceduralGenerator->OnTrackingLoss.AddDynamic(this, &AMRS3DGameplayActor::OnProceduralGeneratorTrackingLoss);
+		ProceduralGenerator->OnTrackingRecovery.AddDynamic(this, &AMRS3DGameplayActor::OnProceduralGeneratorTrackingRecovery);
+		ProceduralGenerator->OnTrackingQualityChange.AddDynamic(this, &AMRS3DGameplayActor::OnProceduralGeneratorTrackingQualityChange);
 		
 		// Configure async generation settings
 		ProceduralGenerator->SetAsyncThreshold(AsyncGenerationThreshold);
@@ -136,9 +163,49 @@ void AMRS3DGameplayActor::OnBitmapPointsUpdated(const TArray<FBitmapPoint>& Poin
 
 void AMRS3DGameplayActor::UpdateTrackingState(ETrackingState NewState, float Quality, const FString& LossReason)
 {
+	ETrackingState PreviousState = CurrentTrackingState;
+	float PreviousQuality = CurrentTrackingQuality;
+	
+	CurrentTrackingState = NewState;
+	CurrentTrackingQuality = FMath::Clamp(Quality, 0.0f, 1.0f);
+	
+	// Update bitmap mapper with new tracking state
 	if (BitmapMapper)
 	{
-		BitmapMapper->UpdateARTrackingState(NewState, Quality, LossReason);
+		BitmapMapper->UpdateARTrackingState(NewState, FTransform::Identity, Quality);
+	}
+	
+	// Update tracking state manager
+	if (TrackingStateManager)
+	{
+		TrackingStateManager->UpdateTrackingState(NewState, GetActorTransform(), Quality);
+	}
+	
+	// Handle state transitions
+	if (PreviousState != NewState)
+	{
+		if (NewState == ETrackingState::TrackingLost || NewState == ETrackingState::NotTracking)
+		{
+			HandleTrackingLoss(PreviousState, LossReason);
+		}
+		else if ((PreviousState == ETrackingState::TrackingLost || PreviousState == ETrackingState::NotTracking) && 
+				 (NewState == ETrackingState::FullTracking || NewState == ETrackingState::LimitedTracking))
+		{
+			float LostDuration = bIsCurrentlyTrackingLost ? (FPlatformTime::Seconds() - TrackingLossStartTime) : 0.0f;
+			HandleTrackingRecovery(NewState, LostDuration);
+		}
+	}
+	
+	// Handle quality changes
+	if (FMath::Abs(PreviousQuality - CurrentTrackingQuality) > 0.1f)
+	{
+		OnARTrackingQualityChanged.Broadcast(PreviousQuality, CurrentTrackingQuality);
+		
+		// Update procedural generator quality
+		if (ProceduralGenerator)
+		{
+			ProceduralGenerator->UpdateTrackingQuality(CurrentTrackingQuality);
+		}
 	}
 }
 
@@ -248,6 +315,165 @@ UFUNCTION()
 void AMRS3DGameplayActor::OnTrackingStateChanged(ETrackingState NewState)
 {
 	UE_LOG(LogTemp, Log, TEXT("Tracking state changed to: %d"), (int32)NewState);
+}
+
+void AMRS3DGameplayActor::HandleTrackingLoss(ETrackingState PreviousState, const FString& LossReason)
+{
+	if (bIsCurrentlyTrackingLost)
+	{
+		return; // Already handling tracking loss
+	}
+	
+	bIsCurrentlyTrackingLost = true;
+	TrackingLossStartTime = FPlatformTime::Seconds();
+	LastTrackingLossReason = LossReason;
+	PreLossActorTransform = GetActorTransform();
+	
+	UE_LOG(LogTemp, Warning, TEXT("AR Tracking Lost in MRS3DGameplayActor: %s (Previous State: %d)"), *LossReason, (int32)PreviousState);
+	
+	// Pause generation if configured
+	if (bPauseGenerationOnTrackingLoss && ProceduralGenerator)
+	{
+		ProceduralGenerator->HandleTrackingLoss(PreviousState, LossReason);
+	}
+	
+	// Store spatial anchor if enabled
+	if (bUseSpatialAnchors && ProceduralGenerator)
+	{
+		ProceduralGenerator->StoreSpatialAnchor(PreLossActorTransform, FString::Printf(TEXT("Actor_%s"), *GetName()));
+	}
+	
+	// Broadcast tracking loss event
+	OnARTrackingLoss.Broadcast(PreviousState);
+}
+
+void AMRS3DGameplayActor::HandleTrackingRecovery(ETrackingState NewState, float LostDuration)
+{
+	if (!bIsCurrentlyTrackingLost)
+	{
+		return; // Not in tracking loss state
+	}
+	
+	bIsCurrentlyTrackingLost = false;
+	
+	UE_LOG(LogTemp, Log, TEXT("AR Tracking Recovered in MRS3DGameplayActor: New State %d after %.2f seconds"), (int32)NewState, LostDuration);
+	
+	// Auto-reposition if configured
+	if (bAutoRepositionOnRecovery)
+	{
+		ForceSpatialRepositioning();
+	}
+	
+	// Resume generation
+	if (bPauseGenerationOnTrackingLoss && ProceduralGenerator)
+	{
+		ProceduralGenerator->HandleTrackingRecovery(NewState, LostDuration);
+	}
+	
+	// Broadcast tracking recovery event
+	OnARTrackingRecovery.Broadcast(NewState, LostDuration);
+}
+
+void AMRS3DGameplayActor::ForceSpatialRepositioning()
+{
+	if (bUseSpatialAnchors && ProceduralGenerator)
+	{
+		FString AnchorID = FString::Printf(TEXT("Actor_%s"), *GetName());
+		if (ProceduralGenerator->RestoreFromSpatialAnchor(AnchorID))
+		{
+			UE_LOG(LogTemp, Log, TEXT("Successfully repositioned from spatial anchor: %s"), *AnchorID);
+			OnSpatialAnchorRecovered.Broadcast(AnchorID);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Failed to reposition from spatial anchor, using pre-loss transform"));
+			SetActorTransform(PreLossActorTransform);
+			OnSpatialAnchorLost.Broadcast(AnchorID);
+		}
+	}
+	else
+	{
+		// Fallback to pre-loss transform
+		SetActorTransform(PreLossActorTransform);
+	}
+}
+
+void AMRS3DGameplayActor::SetTrackingLossResponse(bool bPauseGeneration, bool bShowWarning, bool bAutoReposition)
+{
+	bPauseGenerationOnTrackingLoss = bPauseGeneration;
+	bShowTrackingLossWarning = bShowWarning;
+	bAutoRepositionOnRecovery = bAutoReposition;
+	
+	UE_LOG(LogTemp, Log, TEXT("Tracking loss response updated: Pause=%s, Warning=%s, AutoReposition=%s"), 
+		bPauseGeneration ? TEXT("true") : TEXT("false"),
+		bShowWarning ? TEXT("true") : TEXT("false"),
+		bAutoReposition ? TEXT("true") : TEXT("false"));
+}
+
+ETrackingState AMRS3DGameplayActor::GetCurrentTrackingState() const
+{
+	return CurrentTrackingState;
+}
+
+float AMRS3DGameplayActor::GetTrackingQuality() const
+{
+	return CurrentTrackingQuality;
+}
+
+bool AMRS3DGameplayActor::IsTrackingLost() const
+{
+	return bIsCurrentlyTrackingLost;
+}
+
+float AMRS3DGameplayActor::GetTrackingLossDuration() const
+{
+	if (!bIsCurrentlyTrackingLost)
+	{
+		return 0.0f;
+	}
+	
+	return FPlatformTime::Seconds() - TrackingLossStartTime;
+}
+
+// Internal event handlers for tracking state manager
+void AMRS3DGameplayActor::OnTrackingLostInternal(float LostDuration)
+{
+	HandleTrackingLoss(CurrentTrackingState, TEXT("Tracking lost from state manager"));
+}
+
+void AMRS3DGameplayActor::OnTrackingRecoveredInternal()
+{
+	float LostDuration = bIsCurrentlyTrackingLost ? GetTrackingLossDuration() : 0.0f;
+	HandleTrackingRecovery(ETrackingState::FullTracking, LostDuration);
+}
+
+void AMRS3DGameplayActor::OnTrackingQualityChangedInternal(EMRTrackingQuality OldQuality, EMRTrackingQuality NewQuality)
+{
+	// Convert EMRTrackingQuality to float
+	float OldQualityFloat = static_cast<float>(OldQuality) / 3.0f;
+	float NewQualityFloat = static_cast<float>(NewQuality) / 3.0f;
+	
+	CurrentTrackingQuality = NewQualityFloat;
+	OnARTrackingQualityChanged.Broadcast(OldQualityFloat, NewQualityFloat);
+}
+
+// Event handlers for ProceduralGenerator tracking events
+void AMRS3DGameplayActor::OnProceduralGeneratorTrackingLoss(ETrackingState PreviousState)
+{
+	UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator reported tracking loss"));
+	OnARTrackingLoss.Broadcast(PreviousState);
+}
+
+void AMRS3DGameplayActor::OnProceduralGeneratorTrackingRecovery(ETrackingState NewState, float LostDuration)
+{
+	UE_LOG(LogTemp, Log, TEXT("ProceduralGenerator reported tracking recovery"));
+	OnARTrackingRecovery.Broadcast(NewState, LostDuration);
+}
+
+void AMRS3DGameplayActor::OnProceduralGeneratorTrackingQualityChange(float OldQuality, float NewQuality)
+{
+	CurrentTrackingQuality = NewQuality;
+	OnARTrackingQualityChanged.Broadcast(OldQuality, NewQuality);
 }
 
 void AMRS3DGameplayActor::VisualizePlanes()
